@@ -1,7 +1,7 @@
-import { callGoogle, drive, LIBRARY_SCOPE, PICKER_SCOPE, type Account } from "@/lib/drive/api";
-import { count, human } from "@/lib/drive/engine";
-import { endPicking, listPicked, MAX_PICK, pollPicking, startPicking, type Picked } from "./engine";
-import { relayChunk } from "./relay";
+import { callGoogle, drive, DRIVE_SCOPE, LIBRARY_SCOPE, PICKER_SCOPE, type Account } from "@/lib/drive/api";
+import { count, createFolder, human } from "@/lib/drive/engine";
+import { listPicked, MAX_PICK, pollPicking, startPicking, type Picked } from "./engine";
+import { relayChunk, relayChunkToDrive } from "./relay";
 
 /**
  * Photos for the AI connector (server side).
@@ -49,7 +49,8 @@ export function requireLibrary(acct: Account) {
 
 /**
  * Makes an empty album in `acct`'s Google Photos. Add-only access means Offload can fill it only with photos it adds
- * itself (copy_google_photos); the person can add any of their own photos to it in Google Photos.
+ * itself (copy_google_photos with album_id, then add_to_photos_album); the person can add any of their own photos to
+ * it in Google Photos.
  */
 export async function createAlbum(acct: Account, title: string) {
   requireLibrary(acct);
@@ -60,7 +61,8 @@ export async function createAlbum(acct: Account, title: string) {
   return {
     message:
       `Made an empty album "${clean}" in ${acct.e}'s Google Photos. ` +
-      "Add photos to it in Google Photos (open the album and choose Add photos); Offload can only put in photos it copies there itself.",
+      "Offload can fill it with photos it copies into this account (copy_google_photos with this album_id, or add_to_photos_album for copies " +
+      "it already made). Photos that were already in the account have to be added in Google Photos (open the album and choose Add photos).",
     account: acct.e,
     album_id: String(a.id),
     title: clean,
@@ -317,7 +319,8 @@ export function inPeriod(items: Picked[], period?: string) {
  * Previews
  * ===================================================================== */
 
-export type Preview = { name: string; taken?: string; account: string; video: boolean; data: string; mime: string };
+/** `item` = its number in the picked set (Google Photos picks only), the number copy_google_photos takes. */
+export type Preview = { item?: number; name: string; taken?: string; account: string; video: boolean; data: string; mime: string };
 
 async function fetchImage(url: string, token: string): Promise<{ data: string; mime: string } | null> {
   try {
@@ -333,13 +336,18 @@ async function fetchImage(url: string, token: string): Promise<{ data: string; m
   }
 }
 
-/** Small previews of picked Google Photos items (videos show their first frame). */
-export async function pickedPreviews(acct: Account, items: Picked[], token: (a: Account, scope: string) => Promise<string>): Promise<Preview[]> {
+/** Small previews of picked Google Photos items (videos show their first frame). `nums` = each one's number in the picked set. */
+export async function pickedPreviews(
+  acct: Account,
+  items: Picked[],
+  token: (a: Account, scope: string) => Promise<string>,
+  nums: number[] = []
+): Promise<Preview[]> {
   const t = await token(acct, PICKER_SCOPE);
   const out = await Promise.all(
-    items.map(async (it): Promise<Preview | null> => {
+    items.map(async (it, i): Promise<Preview | null> => {
       const img = await fetchImage(`${it.url}=w${PREVIEW_PX}-h${PREVIEW_PX}`, t);
-      return img ? { name: it.name, taken: it.time, account: acct.e, video: it.video, ...img } : null;
+      return img ? { ...(nums[i] ? { item: nums[i] } : {}), name: it.name, taken: it.time, account: acct.e, video: it.video, ...img } : null;
     })
   );
   return out.filter((x): x is Preview => !!x);
@@ -380,18 +388,29 @@ export async function drivePreviews(accounts: Account[], ids: string[], token: (
 }
 
 /* ===================================================================== *
- * Google Photos: copying picked items to another account
+ * Google Photos: copying picked items to another account (its Google Photos or its Drive)
  * ===================================================================== */
 
-/** Where a copy job has got to. `next` is the next picked item to start; `open` are items stopped halfway. */
+/** Where a copy job has got to. `next` is the next position in the order to start; `open` are items stopped halfway. */
 export type CopyState = {
   k: "pcopy";
   a: number; // source account
   to: number; // receiving account
   id: string; // picking session
+  /** Where the copies go. Missing on tokens from before Drive copies: Google Photos. */
+  dest?: "photos" | "drive";
+  /** Which picked items to copy (0-based positions in the picked set), in order. Missing or null: all of them. */
+  pick?: number[] | null;
   next: number;
   open: { i: number; up: string | null; off: number }[];
-  album: { id: string; url: string } | null;
+  /** Google Photos: the album the copies go into. `own` = the person chose it (album_id), so it's not replaced. */
+  album: { id: string; url: string; title?: string; own?: boolean } | null;
+  /** Google Photos: the name for the album Offload makes on the first call, if not "Copied from <source>". */
+  albumTitle?: string;
+  /** Google Photos: why the album couldn't be used, if it couldn't. */
+  albumLost?: string;
+  /** Drive: the folder the copies go into. Made on the first call if the person didn't choose one. */
+  folder?: { id: string; name: string; link: string } | null;
   total: number;
   copied: number;
   failed: number;
@@ -399,12 +418,17 @@ export type CopyState = {
   errors: { name: string; detail: string }[];
 };
 
+/** One finished copy, as handed to the AI: its number in the picked set and the new item's ID. */
+export type Made = { item: number; name: string; id: string; link?: string };
+
 const BATCH = 50;
 const PARALLEL = 4;
 
 /**
- * Copies picked items from the source account's Google Photos into `to`'s, into an album "Copied from <source>",
- * for up to `budgetMs`. Big videos can stop halfway and carry on next call. Originals stay where they are.
+ * Copies picked items from the source account's Google Photos into `to`'s Google Photos (into an album) or `to`'s
+ * Drive (into a folder), for up to `budgetMs`. Big videos can stop halfway and carry on next call. Originals stay
+ * where they are, and the picking session is left open, so the same pick can be copied again somewhere else (Google
+ * expires it on its own).
  */
 export async function copyPickedServer(
   accounts: Account[],
@@ -415,28 +439,41 @@ export async function copyPickedServer(
   const from = accounts[st.a];
   const to = accounts[st.to];
   if (!from || !to) throw new Error("That copy belongs to a different connection. Start again with pick_google_photos.");
+  const toDrive = st.dest === "drive";
+  const destScope = toDrive ? DRIVE_SCOPE : LIBRARY_SCOPE;
   requirePicker(from);
-  requireLibrary(to);
+  if (!toDrive) requireLibrary(to);
   const items = await listPicked(from, st.id);
-  st.total = items.length;
+  const order = st.pick || null;
+  const positions = order ? order.length : items.length;
+  st.total = positions;
   const start = Date.now();
   let progressed = false; // every call copies at least one piece before it can stop
   const outOfTime = () => progressed && Date.now() - start > budgetMs;
+  const work = st.next < positions || st.open.length > 0;
+  const albumName = () => st.album?.title || st.albumTitle || `Copied from ${from.e}`;
 
-  if (!st.album && (st.next < items.length || st.open.length)) {
+  if (work && !toDrive && !st.album && !st.albumLost) {
+    const title = albumName();
     try {
-      const a = await callGoogle(LIBRARY, LIBRARY_SCOPE, to, "POST", "albums", {}, { album: { title: `Copied from ${from.e}` } });
-      st.album = { id: a.id, url: a.productUrl || "" };
+      const a = await callGoogle(LIBRARY, LIBRARY_SCOPE, to, "POST", "albums", {}, { album: { title } });
+      st.album = { id: a.id, url: a.productUrl || "", title };
     } catch {
       st.album = null; // copy without an album rather than not at all
+      st.albumLost = `Google Photos wouldn't make the album "${title}", so the copies are in the library without an album.`;
     }
   }
+  if (work && toDrive && !st.folder) {
+    const f = await createFolder(to, `Copied from ${from.e} (Google Photos)`);
+    st.folder = { id: f.folder_id, name: f.name, link: f.link };
+  }
 
+  const made: Made[] = [];
   const fail = (it: Picked | undefined, detail: string) => {
     st.failed++;
     if (st.errors.length < 10) st.errors.push({ name: it?.name || "an item", detail });
   };
-  const ready: { it: Picked; token: string }[] = [];
+  const ready: { i: number; it: Picked; token: string }[] = [];
   const stopped: CopyState["open"] = [];
   const queue = [...st.open];
   st.open = [];
@@ -452,19 +489,20 @@ export async function copyPickedServer(
         stopped.push({ i: job.i, up, off });
         return;
       }
-      const r = await relayChunk({
+      const common = {
         src: it.url,
         video: it.video,
         mime: it.mime,
         srcToken: await token(from, PICKER_SCOPE),
-        destToken: await token(to, LIBRARY_SCOPE),
+        destToken: await token(to, destScope),
         upload: up,
         offset: off,
-      });
+      };
+      const r = toDrive ? await relayChunkToDrive({ ...common, name: it.name, folder: st.folder!.id }) : await relayChunk(common);
       if (!r.ok) {
         if (r.status === 401 && !retried) {
           retried = true; // the sign-in ran out: get a fresh one and try that piece again
-          if (r.side === "upload") await token(to, LIBRARY_SCOPE, true);
+          if (r.side === "upload") await token(to, destScope, true);
           else await token(from, PICKER_SCOPE, true);
           continue;
         }
@@ -474,8 +512,11 @@ export async function copyPickedServer(
       up = r.upload;
       off = r.offset;
       if (r.done) {
-        ready.push({ it, token: r.token || "" });
         st.bytes += r.total;
+        if ("file" in r && r.file) {
+          st.copied++;
+          made.push({ item: job.i + 1, name: r.file.name, id: r.file.id, link: r.file.link });
+        } else ready.push({ i: job.i, it, token: ("token" in r && r.token) || "" });
         return;
       }
     }
@@ -484,7 +525,11 @@ export async function copyPickedServer(
   const worker = async () => {
     for (;;) {
       if (outOfTime()) return;
-      const job = queue.shift() || (st.next < items.length ? { i: st.next++, up: null, off: 0 } : null);
+      let job = queue.shift();
+      if (!job && st.next < positions) {
+        const pos = st.next++;
+        job = { i: order ? order[pos] : pos, up: null, off: 0 };
+      }
       if (!job) return;
       try {
         await copyOne(job);
@@ -496,7 +541,7 @@ export async function copyPickedServer(
   await Promise.all(Array.from({ length: PARALLEL }, worker));
   st.open = [...queue, ...stopped];
 
-  // Add everything uploaded in this call to Google Photos, 50 at a time.
+  // Google Photos: add everything uploaded in this call to the library, 50 at a time.
   for (let i = 0; i < ready.length; i += BATCH) {
     const batch = ready.slice(i, i + BATCH);
     const body: any = { newMediaItems: batch.map((b) => ({ simpleMediaItem: { uploadToken: b.token, fileName: b.it.name } })) };
@@ -507,7 +552,11 @@ export async function copyPickedServer(
         res = await callGoogle(LIBRARY, LIBRARY_SCOPE, to, "POST", "mediaItems:batchCreate", {}, body);
       } catch (e) {
         if (!body.albumId) throw e;
-        delete body.albumId; // the album may have been deleted: add them without it
+        // The album may have been deleted or, if the person chose it, not made by Offload: add them without it.
+        delete body.albumId;
+        st.albumLost = st.album?.own
+          ? "Google Photos wouldn't add them to the album you chose (Offload can only fill albums it made itself), so they're in the library without an album."
+          : `The album "${albumName()}" has gone, so the rest are in the library without an album.`;
         st.album = null;
         res = await callGoogle(LIBRARY, LIBRARY_SCOPE, to, "POST", "mediaItems:batchCreate", {}, body);
       }
@@ -517,38 +566,114 @@ export async function copyPickedServer(
     }
     const byToken = new Map<string, any>((res.newMediaItemResults || []).map((r: any) => [r.uploadToken, r]));
     for (const b of batch) {
-      if (byToken.get(b.token)?.mediaItem) st.copied++;
-      else fail(b.it, byToken.get(b.token)?.status?.message || "Google Photos didn't accept it.");
+      const m = byToken.get(b.token)?.mediaItem;
+      if (m?.id) {
+        st.copied++;
+        made.push({ item: b.i + 1, name: m.filename || b.it.name, id: String(m.id), ...(m.productUrl ? { link: m.productUrl } : {}) });
+      } else fail(b.it, byToken.get(b.token)?.status?.message || "Google Photos didn't accept it.");
     }
   }
 
-  const done = st.next >= items.length && !st.open.length;
-  if (done) await endPicking(from, st.id);
+  const done = st.next >= positions && !st.open.length;
   const finished = st.copied + st.failed;
+  const where = toDrive
+    ? `${to.e}'s Google Drive` + (st.folder ? `, in the folder "${st.folder.name}"` : "")
+    : `${to.e}'s Google Photos` + (st.album ? `, in the album "${albumName()}"` : "");
   const message = done
     ? [
-        st.copied
-          ? `Copied ${count(st.copied, "photo or video", "photos and videos")} (${human(st.bytes)}) from ${from.e} to ${to.e}'s Google Photos` +
-            (st.album ? `, in the album "Copied from ${from.e}".` : ".")
-          : `Nothing was copied to ${to.e}.`,
+        st.copied ? `Copied ${count(st.copied, "photo or video", "photos and videos")} (${human(st.bytes)}) from ${from.e} to ${where}.` : `Nothing was copied to ${to.e}.`,
+        ...(st.albumLost && !toDrive ? [st.albumLost] : []),
         ...(st.failed ? [`${count(st.failed, "item")} couldn't be copied.`] : []),
-        ...(st.copied ? [`The originals are still in ${from.e}. Check the copies, then delete the originals in Google Photos to free the space there.`] : []),
+        ...(st.copied
+          ? [
+              toDrive
+                ? `The originals are still in ${from.e}'s Google Photos, and the copies use ${to.e}'s storage.`
+                : `The originals are still in ${from.e}. Check the copies, then delete the originals in Google Photos to free the space there.`,
+            ]
+          : []),
       ].join(" ")
     : `Still copying to ${to.e}: ${finished.toLocaleString("en-US")} of ${count(st.total, "item")} done (${human(st.bytes)}). Carrying on…`;
-  return { done, message };
+  return { done, message, made };
 }
 
-export function copyResult(st: CopyState, accounts: Account[], done: boolean, message: string) {
+export function copyResult(st: CopyState, accounts: Account[], done: boolean, message: string, made: Made[]) {
+  const toDrive = st.dest === "drive";
   return {
     message,
     done,
     from: accounts[st.a]?.e,
     to: accounts[st.to]?.e,
+    copied_into: toDrive ? "google_drive" : "google_photos",
     total: st.total,
     copied: st.copied,
     failed: st.failed,
     copied_size: human(st.bytes),
-    ...(st.album?.url ? { album: st.album.url } : {}),
+    ...(!toDrive && st.album ? { album_id: st.album.id, album_title: st.album.title, ...(st.album.url ? { album: st.album.url } : {}) } : {}),
+    ...(toDrive && st.folder ? { folder_id: st.folder.id, folder_name: st.folder.name, folder: st.folder.link } : {}),
+    ...(made.length
+      ? {
+          copies: [...made].sort((x, y) => x.item - y.item),
+          copies_note: toDrive
+            ? "The new Drive files from this call (item = its number in the picked set). Pass their ids to add_to_drive_folder to put them in more folders."
+            : "The new Google Photos items from this call (item = its number in the picked set). Keep these ids: add_to_photos_album needs them to put the copies in more albums." +
+              (done ? "" : " Each later call lists the copies it makes."),
+        }
+      : {}),
     ...(st.errors.length ? { problems: st.errors } : {}),
   };
+}
+
+/* ===================================================================== *
+ * Google Photos: adding Offload's copies to more albums
+ * ===================================================================== */
+
+const MEDIA_ID_RE = /^[A-Za-z0-9_-]{10,}$/;
+
+/**
+ * Adds media items to an album, all in `acct`'s Google Photos. Google allows it only when Offload made both the album
+ * (create_photos_album or copy_google_photos) and the items (copy_google_photos). An item can be in many albums
+ * without using more storage. Google adds a batch all or nothing, so a batch that fails is retried one by one to find
+ * the items it won't take.
+ */
+export async function addToAlbum(acct: Account, albumId: string, ids: string[]) {
+  requireLibrary(acct);
+  if (!MEDIA_ID_RE.test(albumId)) throw new Error(`${albumId} isn't an album ID. create_photos_album and copy_google_photos return album_id.`);
+  const want = [...new Set(ids.map((x) => x.trim()).filter(Boolean))];
+  const good = want.filter((x) => MEDIA_ID_RE.test(x));
+  if (!good.length) throw new Error("Pass media_item_ids: the ids in copy_google_photos's copies.");
+  const refused: { id: string; detail: string }[] = want.filter((x) => !MEDIA_ID_RE.test(x)).map((id) => ({ id, detail: "That isn't a media item ID." }));
+  const add = (batch: string[]) =>
+    callGoogle(LIBRARY, LIBRARY_SCOPE, acct, "POST", `albums/${encodeURIComponent(albumId)}:batchAddMediaItems`, {}, { mediaItemIds: batch });
+  const reason = (e: unknown) => (e instanceof Error ? e.message : String(e));
+  let added = 0;
+  for (let i = 0; i < good.length; i += BATCH) {
+    const batch = good.slice(i, i + BATCH);
+    try {
+      await add(batch);
+      added += batch.length;
+      continue;
+    } catch (e) {
+      if (batch.length === 1) {
+        refused.push({ id: batch[0], detail: reason(e) });
+        continue;
+      }
+    }
+    for (const id of batch) {
+      try {
+        await add([id]);
+        added++;
+      } catch (e) {
+        refused.push({ id, detail: reason(e) });
+      }
+    }
+  }
+  const why =
+    "Google only lets Offload add photos it copied itself (the ids from copy_google_photos) to albums it made itself " +
+    `(create_photos_album or copy_google_photos), both in the same account (${acct.e}).`;
+  const message = added
+    ? `Added ${count(added, "photo or video", "photos and videos")} to the album in ${acct.e}'s Google Photos. ` +
+      "They use no extra storage: it's the same copy in another album." +
+      (refused.length ? ` ${count(refused.length, "item")} couldn't be added. ${why}` : "")
+    : `Nothing was added to the album. ${why}`;
+  return { message, account: acct.e, album_id: albumId, added, ...(refused.length ? { not_added: refused.slice(0, 20) } : {}) };
 }

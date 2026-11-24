@@ -1,11 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { count, createFolder, describeFind, findFiles, folderSize, human, listing, storage, transfer } from "@/lib/drive/engine";
+import { addToFolder, count, createFolder, describeFind, findFiles, folderIn, folderSize, human, listing, storage, transfer } from "@/lib/drive/engine";
 import type { SizeState, TransferState } from "@/lib/drive/engine";
 import { packCursor, unpackCursor } from "./cursor";
 import type { Account } from "./google";
 import { accessToken } from "./google"; // importing it also registers the server-side Google token source
 import {
+  addToAlbum,
   copyPickedServer,
   copyResult,
   createAlbum,
@@ -41,14 +42,17 @@ Moving: get_accounts → find_files / folder_size to pick what to move → confi
 
 Only files the sending account owns can be moved; files owned by anyone else are skipped. Moved items keep their folder structure; loose ones land in "Transferred from <sender>" in the receiving account's My Drive. A transfer can be undone by moving the items back. Nothing is deleted.
 
-New folders: create_drive_folder makes an empty folder in any linked account's Drive (in My Drive, or inside parent_id) and returns its link. Offload doesn't file things into it: the person drags files in, in Drive.
+Folders: create_drive_folder makes an empty folder in any linked account's Drive (in My Drive, or inside parent_id) and returns its folder_id. add_to_drive_folder files things into a folder in the same account: how=move moves them there; how=shortcut leaves them where they are and adds a shortcut (no extra storage), which is how one file goes into several folders, since Drive keeps each file in one folder.
 
 Photos come in two kinds, and Google treats them differently:
 - Photos and videos stored in Google Drive: photo_timeline counts all of them, month by month and year by year (count, size, video length, cameras, busiest month and year), and gives preview_ids for each month. If it returns done: false, call it again with only continue_token. Show the years as a small table, then the months the person asks about.
 - The Google Photos library: Google only lets apps see photos the person picks. pick_google_photos returns a picker_url: give it to the person as a link, ask them to choose photos (they can pick up to 2,000) and press Done, and wait for them to say they've finished before calling picked_photos. Don't call picked_photos repeatedly while they're picking. picked_photos gives the same month and year timeline for the picked photos.
-- show_photos shows small previews in the chat: pass Drive file IDs (preview_ids from photo_timeline, or IDs from find_files with kind=media), or a photos_session with an optional period (2019, or 2019-07) for picked Google Photos. Describe what's in them if the person asks.
-- copy_google_photos copies picked Google Photos into another linked account's Google Photos, into an album "Copied from <account>". Confirm first. While done is false, call again with only continue_token. Originals stay put; the person deletes them in Google Photos to free the space. Drive photos are moved with transfer_files instead.
-- create_photos_album makes an empty album in a linked account's Google Photos and returns its link. Google only lets Offload add photos it copies there itself, so tell the person to add their own photos to it in Google Photos.
+- show_photos shows small previews in the chat: pass Drive file IDs (preview_ids from photo_timeline, or IDs from find_files with kind=media), or a photos_session with an optional period (2019, or 2019-07) for picked Google Photos. Each picked preview has an item number (its place in the whole pick): use those numbers when talking about photos and in copy_google_photos's items. Describe what's in them if the person asks.
+- copy_google_photos copies picked Google Photos (all of them, or only items) into another linked account: its Google Photos (to=photos, the default) into an album, or its Google Drive (to=drive) into a folder. Album: album_id (from create_photos_album), album_title (a new one with that name), or by default a new "Copied from <account>". Folder: folder_id, or by default a new "Copied from <account> (Google Photos)". Confirm first. While done is false, call again with only continue_token. Each call returns copies: the new items' ids, by item number; keep them. Originals stay put; the person deletes them in Google Photos to free the space. The pick stays usable, so the same photos can also be copied to Drive. Drive photos are moved with transfer_files instead.
+- create_photos_album makes an empty album in a linked account's Google Photos and returns its album_id.
+- add_to_photos_album puts copies Offload made (ids from copy_google_photos's copies) into another album Offload made, in the same account. A photo in several albums is one copy and uses no extra storage, so copy each photo once and add it to the rest of its albums with add_to_photos_album, rather than copying it again.
+- What Google doesn't allow, so don't offer it: listing or reading the person's albums, adding to albums they made in Google Photos, putting photos that were already in an account into an album, deleting anything from Google Photos. Offload only ever adds its own copies to its own albums; the person adds their existing photos in Google Photos.
+- Sorting photos into albums or folders (for example one per person): pick → show_photos → agree which item numbers go where → for albums, create_photos_album once per group in the receiving account, copy_google_photos with all the items into one of them (or its own album), then add_to_photos_album for every other album each copy belongs in. For Drive folders, create_drive_folder once per group, copy_google_photos with to=drive into one folder, then add_to_drive_folder with how=shortcut for the other folders each file belongs in.
 - If a tool says an account hasn't allowed Google Photos, pass on its message: the person reconnects Offload and leaves the Google Photos boxes ticked.`;
 
 function text(data: unknown) {
@@ -65,9 +69,9 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
     {
       name: "offload",
       title: "Offload",
-      version: "1.3.0",
+      version: "1.4.0",
       description:
-        "Move Google Drive files between your Google accounts, see how much space each one has, browse your photos month by month and year by year, copy Google Photos to another account, and make new Drive folders and Google Photos albums.",
+        "Move Google Drive files between your Google accounts, see how much space each one has, browse your photos month by month and year by year, copy Google Photos to another account's Google Photos or Drive, and sort them into new albums and folders.",
       ...(site
         ? {
             websiteUrl: site,
@@ -241,6 +245,32 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
     async (args) => {
       try {
         return text(await createFolder(args.account ? find(args.account) : main, args.name, args.parent_id));
+      } catch (e) {
+        return failure(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "add_to_drive_folder",
+    {
+      title: "Put files into a Drive folder",
+      description:
+        "Puts Drive files or folders into a folder, all in one linked account's Drive. how=move moves each one there (out of where it was). " +
+        "how=shortcut leaves it where it is and adds a shortcut to it in the folder, which uses no storage: use that to put one file in " +
+        "several folders, because Drive keeps each file in exactly one folder. IDs come from find_files, or from copy_google_photos's copies " +
+        "(with to=drive). To move files to another account, use transfer_files instead.",
+      inputSchema: {
+        ids: z.array(z.string()).min(1).max(200).describe("Drive file or folder IDs."),
+        folder_id: z.string().describe("The folder to put them in (from create_drive_folder or find_files with kind=folders). root = My Drive."),
+        how: z.enum(["move", "shortcut"]).default("move"),
+        account: emailArg(`Account whose Drive the files and the folder are in. Defaults to ${main.e}.`),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (args) => {
+      try {
+        return text(await addToFolder(args.account ? find(args.account) : main, args.ids, args.folder_id, args.how));
       } catch (e) {
         return failure(e);
       }
@@ -422,7 +452,7 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
           if (!r.ready) return text({ message: "Nothing picked yet: ask the person to finish picking and press Done.", ready: false });
           const match = inPeriod(r.items, args.period);
           const slice = match.slice(args.offset, args.offset + args.limit);
-          const previews = await pickedPreviews(accounts[t.a], slice, token);
+          const previews = await pickedPreviews(accounts[t.a], slice, token, slice.map((it) => r.items.indexOf(it) + 1));
           const shown = args.offset + slice.length;
           const message = !match.length
             ? `No picked photos ${args.period ? `from ${args.period}` : ""}.`.replace(" .", ".")
@@ -431,7 +461,8 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
           return previewContent(
             {
               message,
-              previews: previews.map((p, i) => ({ n: i + 1, name: p.name, taken: p.taken, video: p.video })),
+              previews: previews.map((p) => ({ item: p.item, name: p.name, taken: p.taken, video: p.video })),
+              note: "item is each one's number in the whole pick, in the same order as the images. copy_google_photos takes these numbers as items.",
               ...(shown < match.length ? { next_offset: shown } : {}),
             },
             previews
@@ -457,15 +488,29 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
     {
       title: "Copy picked Google Photos to another account",
       description:
-        "Copies the photos and videos picked with pick_google_photos into another linked account's Google Photos, in original quality, " +
-        "into an album \"Copied from <account>\". Google Photos has no ownership transfer, so this is a copy: the originals stay until the " +
-        "person deletes them, and the copies use the receiving account's storage. Confirm with the person first. Big jobs run in steps: " +
-        "while done is false, call again with only continue_token.",
+        "Copies photos and videos picked with pick_google_photos (all of them, or only the item numbers in items) in original quality into " +
+        "another linked account: into its Google Photos (to=photos), in an album, or into its Google Drive (to=drive), in a folder. " +
+        "Album: album_id (from create_photos_album), album_title (makes a new one with that name), or by default a new album " +
+        "\"Copied from <account>\". Folder: folder_id, or by default a new folder \"Copied from <account> (Google Photos)\". " +
+        "Google Photos has no ownership transfer, so this is a copy: the originals stay until the person deletes them, and the copies use the " +
+        "receiving account's storage. Each call returns copies: the new items' ids by item number, for add_to_photos_album or add_to_drive_folder. " +
+        "Confirm with the person first. Big jobs run in steps: while done is false, call again with only continue_token.",
       inputSchema: {
         photos_session: z.string().optional().describe("From pick_google_photos. Not needed with continue_token."),
+        items: z
+          .array(z.number().int().min(1))
+          .max(2000)
+          .optional()
+          .describe("Only these item numbers (from show_photos). Leave out to copy everything picked."),
+        to: z.enum(["photos", "drive"]).default("photos").describe("photos = the receiving account's Google Photos; drive = its Google Drive."),
         to_account: emailArg(
-          two ? "Account that receives the copies. Defaults to the other linked account." : "Account that receives the copies. Required: ask the person if they haven't said."
+          two
+            ? "Account that receives the copies. Defaults to the other linked account. With to=drive it can be the same account."
+            : "Account that receives the copies. Required: ask the person if they haven't said. With to=drive it can be the same account."
         ),
+        album_id: z.string().optional().describe("to=photos: an album Offload made in the receiving account (create_photos_album)."),
+        album_title: z.string().min(1).max(500).optional().describe("to=photos: make a new album with this name for the copies."),
+        folder_id: z.string().optional().describe("to=drive: the folder in the receiving account's Drive to put the copies in."),
         continue_token: z.string().optional().describe("From a previous call that returned done: false."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
@@ -476,21 +521,55 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
         if (args.continue_token) st = unpackCursor<CopyState>(args.continue_token, "pcopy");
         else {
           if (!args.photos_session) throw new Error("Pass the photos_session from pick_google_photos.");
+          const toDrive = args.to === "drive";
+          if (!toDrive && args.folder_id) throw new Error("folder_id is for to=drive. For Google Photos, pass album_id or album_title.");
+          if (toDrive && (args.album_id || args.album_title)) throw new Error("Albums are for to=photos. For Drive, pass folder_id.");
+          if (args.album_id && args.album_title) throw new Error("Pass album_id (an album Offload made) or album_title (a new album), not both.");
           const t = openPick(args.photos_session);
           let to: number;
           if (args.to_account) to = indexOf(args.to_account);
           else if (two) to = t.a === 0 ? 1 : 0;
           else {
-            const options = accounts.filter((_, i) => i !== t.a).map((x) => x.e).join(", ");
+            const options = accounts.filter((_, i) => toDrive || i !== t.a).map((x) => x.e).join(", ");
             throw new Error(`Which account should receive the copies? Pass to_account: one of ${options}. get_accounts shows which has the most room.`);
           }
-          if (to === t.a) throw new Error("Pick a different account to copy to: that's the one the photos are in.");
+          if (to === t.a && !toDrive) throw new Error("Pick a different account to copy to: that's the one the photos are in.");
           const r = await picked(accounts, t);
           if (!r.ready) return text({ message: "Nothing picked yet: ask the person to finish picking and press Done.", done: false });
-          st = { k: "pcopy", a: t.a, to, id: t.id, next: 0, open: [], album: null, total: r.items.length, copied: 0, failed: 0, bytes: 0, errors: [] };
+          let pick: number[] | null = null;
+          if (args.items?.length) {
+            const outside = args.items.filter((n) => n > r.items.length);
+            if (outside.length) {
+              throw new Error(`There ${r.items.length === 1 ? "is 1 picked item" : `are ${r.items.length} picked items`}, so ${listing(outside.map(String))} ${outside.length === 1 ? "isn't one" : "aren't"}. show_photos lists the item numbers.`);
+            }
+            pick = [...new Set(args.items)].map((n) => n - 1);
+          }
+          let folder: CopyState["folder"] = null;
+          if (toDrive && args.folder_id) {
+            const f = await folderIn(accounts[to], args.folder_id);
+            folder = { id: f.id, name: f.name, link: f.id === "root" ? "https://drive.google.com/drive/my-drive" : `https://drive.google.com/drive/folders/${f.id}` };
+          }
+          st = {
+            k: "pcopy",
+            a: t.a,
+            to,
+            id: t.id,
+            dest: toDrive ? "drive" : "photos",
+            pick,
+            next: 0,
+            open: [],
+            album: args.album_id ? { id: args.album_id.trim(), url: "", own: true } : null,
+            ...(args.album_title ? { albumTitle: args.album_title.replace(/\s+/g, " ").trim() } : {}),
+            folder,
+            total: pick ? pick.length : r.items.length,
+            copied: 0,
+            failed: 0,
+            bytes: 0,
+            errors: [],
+          };
         }
-        const { done, message } = await copyPickedServer(accounts, st, PHOTOS_BUDGET_MS, token);
-        const res = copyResult(st, accounts, done, message);
+        const { done, message, made } = await copyPickedServer(accounts, st, PHOTOS_BUDGET_MS, token);
+        const res = copyResult(st, accounts, done, message, made);
         return text(done ? res : { ...res, continue_token: packCursor(st) });
       } catch (e) {
         return failure(e);
@@ -503,8 +582,9 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
     {
       title: "Make an empty Google Photos album",
       description:
-        "Makes an empty album in one linked account's Google Photos. Returns its link. Google only lets Offload put photos it copies " +
-        "there itself into the album (copy_google_photos); the person adds any of their own photos in Google Photos.",
+        "Makes an empty album in one linked account's Google Photos. Returns its album_id and link. Offload can fill it with photos it " +
+        "copies into that account (copy_google_photos with album_id, or add_to_photos_album for copies it already made). Google doesn't " +
+        "let Offload add photos that were already in the account: the person adds those in Google Photos.",
       inputSchema: {
         title: z.string().min(1).max(500).describe("The new album's name."),
         account: emailArg(`Account whose Google Photos gets the album. Defaults to ${main.e}.`),
@@ -514,6 +594,32 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
     async (args) => {
       try {
         return text(await createAlbum(args.account ? find(args.account) : main, args.title));
+      } catch (e) {
+        return failure(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "add_to_photos_album",
+    {
+      title: "Add copied photos to another album",
+      description:
+        "Adds photos and videos Offload copied (the ids in copy_google_photos's copies) to an album Offload made (album_id from " +
+        "create_photos_album or copy_google_photos), in the same account's Google Photos. The same copy can be in many albums and uses no " +
+        "extra storage, so use this instead of copying a photo again. Google doesn't allow it for photos or albums Offload didn't make.",
+      inputSchema: {
+        album_id: z.string().describe("An album Offload made in this account."),
+        media_item_ids: z.array(z.string()).min(1).max(500).describe("ids from copy_google_photos's copies."),
+        account: emailArg("Account whose Google Photos the album and the copies are in (copy_google_photos's to)."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (args) => {
+      try {
+        const acct = args.account ? find(args.account) : null;
+        if (!acct) throw new Error("Which account's Google Photos is the album in? Pass account (the to account from copy_google_photos).");
+        return text(await addToAlbum(acct, args.album_id.trim(), args.media_item_ids));
       } catch (e) {
         return failure(e);
       }

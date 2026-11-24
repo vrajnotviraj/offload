@@ -763,23 +763,26 @@ export async function acceptPending(receiver: Account, ids: string[], budgetMs =
  * New folders
  * ===================================================================== */
 
+/** The folder `id` in `acct`'s Drive, checked: it exists, `acct` can see it, it's a folder and it's not in the Trash. */
+export async function folderIn(acct: Account, id: string): Promise<{ id: string; name: string }> {
+  if (!id || id === "root") return { id: "root", name: "My Drive" };
+  if (!ID_RE.test(id)) throw new Error(`${id} isn't a Drive folder ID. find_files with kind=folders lists folder IDs.`);
+  let p: { id: string; name: string; mimeType: string; trashed?: boolean };
+  try {
+    p = await drive(acct, "GET", `files/${id}`, { fields: "id,name,mimeType,trashed", supportsAllDrives: true });
+  } catch {
+    throw new Error(`${acct.e} can't see a folder with ID ${id}. find_files with kind=folders lists the folders in each account.`);
+  }
+  if (p.mimeType !== FOLDER_MIME) throw new Error(`"${p.name}" is a file, not a folder. Pick a folder.`);
+  if (p.trashed) throw new Error(`"${p.name}" is in the Trash. Pick another folder, or restore it first.`);
+  return { id: p.id, name: p.name };
+}
+
 /** Makes an empty folder in `acct`'s Drive: in My Drive, or inside `parentId` if given. */
 export async function createFolder(acct: Account, name: string, parentId?: string) {
   const clean = name.replace(/\s+/g, " ").trim();
   if (!clean) throw new Error("Give the folder a name.");
-  let parent = { id: "root", name: "My Drive" };
-  if (parentId && parentId !== "root") {
-    if (!ID_RE.test(parentId)) throw new Error(`${parentId} isn't a Drive folder ID. find_files with kind=folders lists folder IDs.`);
-    let p: { id: string; name: string; mimeType: string; trashed?: boolean };
-    try {
-      p = await drive(acct, "GET", `files/${parentId}`, { fields: "id,name,mimeType,trashed", supportsAllDrives: true });
-    } catch {
-      throw new Error(`${acct.e} can't see a folder with ID ${parentId}. find_files with kind=folders lists the folders in each account.`);
-    }
-    if (p.mimeType !== FOLDER_MIME) throw new Error(`"${p.name}" is a file, not a folder. Pick a folder to put the new one in.`);
-    if (p.trashed) throw new Error(`"${p.name}" is in the Trash. Pick another folder, or restore it first.`);
-    parent = { id: p.id, name: p.name };
-  }
+  const parent = await folderIn(acct, parentId || "root");
   const f = await drive<{ id: string; name: string; webViewLink?: string }>(
     acct,
     "POST",
@@ -794,5 +797,101 @@ export async function createFolder(acct: Account, name: string, parentId?: strin
     name: f.name,
     inside: parent.id === "root" ? "My Drive" : parent.name,
     link: f.webViewLink || `https://drive.google.com/drive/folders/${f.id}`,
+  };
+}
+
+/* ===================================================================== *
+ * Filing files into folders
+ * ===================================================================== */
+
+const SHORTCUT_MIME = "application/vnd.google-apps.shortcut";
+
+/**
+ * Puts files and folders into a folder, all in `acct`'s Drive. "move" takes each one out of where it is now and puts
+ * it in the folder. "shortcut" leaves it where it is and adds a shortcut to it in the folder, which uses no storage:
+ * that's how one photo goes into several folders (Drive keeps each file in exactly one folder).
+ */
+export async function addToFolder(acct: Account, ids: string[], folderId: string, how: "move" | "shortcut") {
+  const folder = await folderIn(acct, folderId);
+  const want = [...new Set(ids.map((x) => x.trim()).filter(Boolean))];
+  if (!want.length) throw new Error("Pass ids: Drive file or folder IDs (from find_files, or the copies from copy_google_photos with to=drive).");
+  const done: { id: string; name: string; link?: string }[] = [];
+  const already: string[] = [];
+  const failed: { id: string; name?: string; detail: string }[] = [];
+  const queue = [...want];
+
+  const one = async (id: string) => {
+    if (!ID_RE.test(id) || id === "root") return void failed.push({ id, detail: "That isn't a Drive file ID." });
+    if (id === folder.id) return void failed.push({ id, name: folder.name, detail: "That's the folder itself." });
+    let f: { id: string; name: string; mimeType: string; parents?: string[]; trashed?: boolean; webViewLink?: string };
+    try {
+      f = await drive(acct, "GET", `files/${id}`, { fields: "id,name,mimeType,parents,trashed,webViewLink", supportsAllDrives: true });
+    } catch {
+      return void failed.push({ id, detail: `${acct.e} can't see it. find_files shows which account each file is in.` });
+    }
+    if (f.trashed) return void failed.push({ id, name: f.name, detail: "It's in the Trash." });
+    try {
+      if (how === "move") {
+        const parents = f.parents || [];
+        if (parents.length === 1 && parents[0] === folder.id) return void already.push(f.name);
+        const moved = await drive<{ id: string; name: string; webViewLink?: string }>(
+          acct,
+          "PATCH",
+          `files/${id}`,
+          {
+            addParents: folder.id,
+            removeParents: parents.filter((x) => x !== folder.id).join(",") || undefined,
+            fields: "id,name,webViewLink",
+            supportsAllDrives: true,
+          },
+          {}
+        );
+        done.push({ id: moved.id, name: moved.name, ...(moved.webViewLink ? { link: moved.webViewLink } : {}) });
+      } else {
+        if ((f.parents || []).includes(folder.id)) return void already.push(f.name);
+        const name = f.name.replace(/'/g, "\\'");
+        const existing = await drive<{ files?: { id: string }[] }>(acct, "GET", "files", {
+          q: `'${folder.id}' in parents and mimeType = '${SHORTCUT_MIME}' and name = '${name}' and trashed = false`,
+          fields: "files(id,shortcutDetails(targetId))",
+          pageSize: 50,
+          supportsAllDrives: true,
+          includeItemsFromAllDrives: true,
+        });
+        if ((existing.files || []).some((x: any) => x.shortcutDetails?.targetId === id)) return void already.push(f.name);
+        const sc = await drive<{ id: string; name: string; webViewLink?: string }>(
+          acct,
+          "POST",
+          "files",
+          { fields: "id,name,webViewLink", supportsAllDrives: true },
+          { name: f.name, mimeType: SHORTCUT_MIME, parents: [folder.id], shortcutDetails: { targetId: id } }
+        );
+        done.push({ id: sc.id, name: sc.name, ...(sc.webViewLink ? { link: sc.webViewLink } : {}) });
+      }
+    } catch (e) {
+      failed.push({ id, name: f.name, detail: e instanceof Error ? e.message : String(e) });
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, queue.length) }, async () => {
+      for (let id = queue.shift(); id !== undefined; id = queue.shift()) await one(id);
+    })
+  );
+
+  const where = folder.id === "root" ? "My Drive" : `"${folder.name}"`;
+  const verb = how === "move" ? "Moved" : "Added shortcuts to";
+  const message =
+    (done.length ? `${verb} ${count(done.length, "item")} ${how === "move" ? "into" : "in"} ${where} in ${acct.e}.` : `Nothing was put in ${where}.`) +
+    (already.length ? ` ${count(already.length, "item was", "items were")} already there.` : "") +
+    (failed.length ? ` ${count(failed.length, "item")} couldn't be ${how === "move" ? "moved" : "added"}: see problems.` : "") +
+    (how === "shortcut" && done.length ? " Shortcuts use no storage; the files themselves stay where they were." : "");
+  return {
+    message,
+    account: acct.e,
+    folder_id: folder.id,
+    folder: folder.name,
+    how,
+    [how === "move" ? "moved" : "shortcuts"]: done,
+    ...(already.length ? { already_there: already } : {}),
+    ...(failed.length ? { problems: failed.slice(0, 20) } : {}),
   };
 }
