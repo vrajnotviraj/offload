@@ -31,7 +31,7 @@ Environment variables:
 | --- | --- |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | The Google OAuth client the web app and the Claude connector sign in with (the secret is only used by the connector). |
 | `MCP_TOKEN_SECRET` | Seals the connector's tokens. See Offload in AI apps below. |
-| `NEXT_PUBLIC_SITE_URL` | The site's public address, used for canonical links, the sitemap, share previews and `llms.txt`. Set to `https://www.offloadapp.space` in production on Vercel. Without it, Vercel's production address is used. It's read at build time, so redeploy after changing it. |
+| `NEXT_PUBLIC_SITE_URL` | The site's public address, used for canonical links, the sitemap, share previews and `llms.txt`. Set to `https://www.offloadapp.space` in production on Vercel. Without it, Vercel's production address is used, and failing that `https://www.offloadapp.space` (never localhost, since an AI app can't reach a connector on your own computer). It's read at build time, so redeploy after changing it. |
 
 ## The web app: `/app`
 

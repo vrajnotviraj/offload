@@ -4,13 +4,21 @@ export const SITE_SHORT_TITLE = "Move Google Drive files to your other account";
 export const SITE_DESCRIPTION =
   "Free AI-powered Google storage manager. Bulk move Drive folders, large files and photos to your other Google account, clean up Gmail in bulk, and free up storage in minutes, in the app or by asking ChatGPT or Claude. Nothing to install, files never leave Google.";
 
-/** Public address of the site. Set NEXT_PUBLIC_SITE_URL for a custom domain; Vercel's production address is used otherwise. */
+/** Where Offload lives. Used whenever nothing else says otherwise. */
+const PRODUCTION_URL = "https://www.offloadapp.space";
+
+/**
+ * Public address of the site: the connector address people paste into Claude or ChatGPT, canonical links, the
+ * sitemap and llms.txt. Set NEXT_PUBLIC_SITE_URL to override it; Vercel's production address is used next. It
+ * never falls back to localhost: an AI app can't reach a connector on someone's own computer, so a local build
+ * (or a deploy where neither variable reached the build) still shows the real address.
+ */
 export const SITE_URL = (() => {
   const explicit = process.env.NEXT_PUBLIC_SITE_URL;
   if (explicit) return explicit.replace(/\/$/, "");
   const vercel = process.env.VERCEL_PROJECT_PRODUCTION_URL;
   if (vercel) return `https://${vercel}`;
-  return "http://localhost:3000";
+  return PRODUCTION_URL;
 })();
 
 /**
