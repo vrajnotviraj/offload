@@ -70,7 +70,7 @@ export function GmailDemo() {
 
       {stage === "done" ? (
         <div className="gdone">
-          <b>Moved {n} conversations to Trash.</b> Empty the Trash in Gmail to free the space now, or restore anything within
+          <b>Moved {n} emails to Trash.</b> Empty the Trash in Gmail to free the space now, or restore anything within
           30 days.
           <div className="gactions">
             <a className="btn btn-main" href={APP_URL}>
@@ -86,7 +86,7 @@ export function GmailDemo() {
           <p className="gcount">
             {on.length ? (
               <>
-                <b>{n}</b> conversations match
+                <b>{n}</b> emails match
               </>
             ) : (
               "Tap a filter to see how many emails match."

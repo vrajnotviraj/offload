@@ -4,11 +4,14 @@ import { count } from "@/lib/drive/engine";
 /**
  * Gmail cleanup for the Offload web app.
  *
- * Quick filters plus free-text fields build one Gmail search, which is counted and previewed. Trashing runs in
- * slices that always search from the top (trashed mail drops out of the results), never trash more than the person
- * confirmed, and skip conversations already handled in case the search index lags. Nothing is deleted for good:
- * Gmail empties its Trash after 30 days, or the person does. Only message headers (subject, sender, date) of the
- * newest few matches are ever read, to show what a search found.
+ * Quick filters plus free-text fields build one Gmail search, which is counted and previewed. Trashing works on
+ * emails (not whole conversations), so a starred or important reply in a matching thread is never swept up with it.
+ * It is built for speed: the search is paged 500 emails at a time while earlier pages are already being moved,
+ * 1,000 emails per call (messages.batchModify adding the TRASH label, which is exactly what "Move to Trash" does).
+ * Moving mail while paging can shift later pages, so once the first pass ends the search runs again from the top
+ * until nothing new turns up. It never moves more than the person confirmed. Nothing is deleted for good: Gmail
+ * empties its Trash after 30 days, or the person does. Only the headers (subject, sender, date) of the newest few
+ * matches are ever read, to show what a search found.
  */
 
 export const GMAIL_FILTERS = {
@@ -23,9 +26,16 @@ export type GmailFilter = keyof typeof GMAIL_FILTERS;
 
 export type GmailSearch = { filters: GmailFilter[]; words?: string; subject?: string; from?: string; keepStarred?: boolean };
 
-const COUNT_CAP = 10_000;
+/** messages.list returns at most 500 ids a page. */
+const PAGE = 500;
+/** messages.batchModify takes at most 1,000 ids a call. */
+const BATCH = 1000;
+/** batchModify calls in flight at once: 2 × 50 quota units stays well under Gmail's 250 units a second per person. */
+const IN_FLIGHT = 2;
+const COUNT_CAP = 25_000;
 const PREVIEW = 20;
-const CONCURRENCY = 5;
+/** Re-searches after the first pass, to pick up anything a shifting page skipped. */
+const MAX_SWEEPS = 8;
 
 /** The Gmail search for these choices. Throws if nothing was chosen. */
 export function gmailQuery(f: GmailSearch): string {
@@ -51,15 +61,13 @@ export function gmailTrashUrl(email: string) {
   return `https://mail.google.com/mail/u/?authuser=${encodeURIComponent(email)}#trash`;
 }
 
-export type GmailItem = { id: string; subject: string; from: string; date: string; messages: number };
+export type GmailItem = { id: string; subject: string; from: string; date: string };
 
-async function pool<T>(items: T[], fn: (item: T) => Promise<void>) {
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(CONCURRENCY, items.length) }, async () => {
-      while (next < items.length) await fn(items[next++]);
-    })
-  );
+function listPage(acct: Account, q: string, pageToken?: string): Promise<{ ids: string[]; next?: string }> {
+  return gmail(acct, "GET", "messages", { q, maxResults: PAGE, pageToken, fields: "messages(id),nextPageToken" }).then((r: any) => ({
+    ids: (r.messages || []).map((m: any) => String(m.id)),
+    next: r.nextPageToken || undefined,
+  }));
 }
 
 function header(msg: any, name: string): string {
@@ -73,116 +81,217 @@ function senderName(from: string): string {
   return (m ? m[1] : from).trim();
 }
 
-/** Counts matching conversations (up to 10,000) and fetches the newest 20 to show. */
-export async function gmailPreview(acct: Account, f: GmailSearch, budgetMs = 15_000) {
+/** Subject, sender and date of these emails, all fetched at once. */
+async function loadItems(acct: Account, ids: string[]): Promise<GmailItem[]> {
+  return Promise.all(
+    ids.map(async (id) => {
+      try {
+        const m = await gmail(acct, "GET", `messages/${id}`, {
+          format: "metadata",
+          metadataHeaders: ["Subject", "From"],
+          fields: "id,internalDate,payload/headers",
+        });
+        return {
+          id,
+          subject: header(m, "Subject") || "(no subject)",
+          from: senderName(header(m, "From")),
+          date: m.internalDate ? new Date(Number(m.internalDate)).toISOString() : "",
+        };
+      } catch {
+        return { id, subject: "(couldn't load this one)", from: "", date: "" };
+      }
+    })
+  );
+}
+
+export type GmailPreview = {
+  query: string;
+  count: number;
+  /** Stopped counting at the cap or the time budget: there are more than `count`. */
+  capped: boolean;
+  /** Still paging through the matches; `count` is a running total. */
+  counting: boolean;
+  /** The newest matches, or null while they load. */
+  items: GmailItem[] | null;
+  message: string;
+};
+
+/**
+ * Counts matching emails (up to 25,000) and fetches the newest 20 to show. The newest ones load alongside the count,
+ * and `onUpdate` gets the running result after every page so the number climbs live. Stops early once `alive()` is
+ * false (the person changed the search).
+ */
+export async function gmailPreview(
+  acct: Account,
+  f: GmailSearch,
+  opts: { onUpdate?: (p: GmailPreview) => void; alive?: () => boolean; budgetMs?: number } = {}
+): Promise<GmailPreview> {
   const query = gmailQuery(f);
+  const alive = opts.alive || (() => true);
+  const budget = opts.budgetMs ?? 12_000;
   const start = Date.now();
-  let total = 0;
+
+  const first = await listPage(acct, query);
+  let total = first.ids.length;
+  let next = first.next;
   let capped = false;
-  let first: string[] = [];
-  let pageToken: string | undefined;
-  do {
-    const res = await gmail(acct, "GET", "threads", { q: query, maxResults: 500, pageToken, fields: "threads(id),nextPageToken" });
-    const ids: string[] = (res.threads || []).map((t: any) => t.id);
-    if (!first.length) first = ids;
-    total += ids.length;
-    pageToken = res.nextPageToken;
-    if (pageToken && (total >= COUNT_CAP || Date.now() - start > budgetMs)) {
+  let counting = !!next;
+  let items: GmailItem[] | null = first.ids.length ? null : [];
+
+  const snap = (): GmailPreview => {
+    const n = capped || counting ? `${total.toLocaleString("en-US")}+ emails` : count(total, "email");
+    return {
+      query,
+      count: total,
+      capped,
+      counting,
+      items,
+      message: total ? `${n} match in ${acct.e}.` : `No emails match in ${acct.e}.`,
+    };
+  };
+  const emit = () => alive() && opts.onUpdate?.(snap());
+
+  const shown = loadItems(acct, first.ids.slice(0, PREVIEW)).then((it) => {
+    items = it;
+    emit();
+  });
+  emit();
+
+  while (next && alive()) {
+    if (total >= COUNT_CAP || Date.now() - start > budget) {
       capped = true;
       break;
     }
-  } while (pageToken);
-
-  const shown = first.slice(0, PREVIEW);
-  const items: GmailItem[] = new Array(shown.length);
-  await pool(
-    shown.map((id, i) => [id, i] as const),
-    async ([id, i]) => {
-      try {
-        const t = await gmail(acct, "GET", `threads/${id}`, {
-          format: "metadata",
-          metadataHeaders: ["Subject", "From"],
-          fields: "id,messages(internalDate,payload/headers)",
-        });
-        const msgs = t.messages || [];
-        const last = msgs[msgs.length - 1];
-        items[i] = {
-          id,
-          subject: header(msgs[0], "Subject") || "(no subject)",
-          from: senderName(header(msgs[0], "From")),
-          date: last?.internalDate ? new Date(Number(last.internalDate)).toISOString() : "",
-          messages: msgs.length,
-        };
-      } catch {
-        items[i] = { id, subject: "(couldn't load this one)", from: "", date: "", messages: 0 };
-      }
-    }
-  );
-  const n = capped ? `More than ${count(total, "conversation")}` : count(total, "conversation");
-  const message = total ? `${n} match${total === 1 && !capped ? "es" : ""} in ${acct.e}.` : `No conversations match in ${acct.e}.`;
-  return { query, count: total, capped, items, message };
+    const page = await listPage(acct, query, next);
+    total += page.ids.length;
+    next = page.next;
+    emit();
+  }
+  counting = false;
+  await shown;
+  return snap();
 }
 
-export type TrashState = {
+export type TrashProgress = {
   query: string;
   /** How many the person confirmed; 0 = everything that matches. */
   limit: number;
+  /** Best idea so far of how many will move: the preview's count, raised as the search turns up more. */
+  total: number;
+  /** `total` is exact: the search has been paged to the end. */
+  totalSure: boolean;
   trashed: number;
   failed: number;
-  seen: string[];
+  started: number;
+  /** When it finished (0 while running). */
+  ended: number;
   done: boolean;
   message: string;
 };
 
-export function startTrash(f: GmailSearch, limit: number): TrashState {
-  return { query: gmailQuery(f), limit: Math.max(0, Math.floor(limit) || 0), trashed: 0, failed: 0, seen: [], done: false, message: "" };
-}
+/**
+ * Moves every email matching the search (up to `limit`, 0 = all) to Trash, as fast as Gmail allows, reporting
+ * progress after every page listed and every batch moved. `expected` is the preview's count, for the progress bar.
+ */
+export async function trashMatching(
+  acct: Account,
+  f: GmailSearch,
+  opts: { limit: number; expected: number; onProgress?: (p: TrashProgress) => void }
+): Promise<TrashProgress> {
+  const limit = Math.max(0, Math.floor(opts.limit) || 0);
+  const cap = limit || Infinity;
+  const p: TrashProgress = {
+    query: gmailQuery(f),
+    limit,
+    total: limit || Math.max(0, opts.expected || 0),
+    totalSure: !!limit,
+    trashed: 0,
+    failed: 0,
+    started: Date.now(),
+    ended: 0,
+    done: false,
+    message: "",
+  };
 
-/** Moves a slice of matching conversations to Trash, for up to `budgetMs`. Call again until done. */
-export async function trashSlice(acct: Account, prev: TrashState, budgetMs = 4000): Promise<TrashState> {
-  const state: TrashState = { ...prev, seen: [...prev.seen] };
-  const seen = new Set(state.seen);
-  const start = Date.now();
-  let pageToken: string | undefined;
-  while (!state.done && Date.now() - start < budgetMs) {
-    const left = state.limit ? state.limit - state.trashed - state.failed : 100;
-    if (left <= 0) {
-      state.done = true;
-      break;
+  const say = () => {
+    const failed = p.failed ? ` ${count(p.failed, "email")} couldn't be moved.` : "";
+    p.message = p.done
+      ? (p.trashed
+          ? `Moved ${count(p.trashed, "email")} to Trash in ${acct.e}.`
+          : `Nothing left to move: no emails match in ${acct.e}.`) +
+        failed +
+        (p.trashed ? " They stay in Trash for 30 days, then Gmail deletes them; the space frees up then, or straight away if you empty the Trash." : "")
+      : `Moving to Trash in ${acct.e}…`;
+  };
+  const report = () => {
+    say();
+    opts.onProgress?.({ ...p });
+  };
+
+  const seen = new Set<string>();
+  const queue: string[] = [];
+  const inflight = new Set<Promise<void>>();
+  let lastError: unknown = null;
+
+  const send = (ids: string[]) => {
+    const t: Promise<void> = gmail(acct, "POST", "messages/batchModify", undefined, { ids, addLabelIds: ["TRASH"] })
+      .then(() => {
+        p.trashed += ids.length;
+      })
+      .catch((e) => {
+        p.failed += ids.length;
+        lastError = e;
+      })
+      .finally(() => {
+        inflight.delete(t);
+        report();
+      });
+    inflight.add(t);
+  };
+
+  /** Sends full batches (or everything, with `all`), keeping at most IN_FLIGHT calls going. */
+  const drain = async (all: boolean) => {
+    while (queue.length >= BATCH || (all && queue.length)) {
+      send(queue.splice(0, BATCH));
+      if (inflight.size >= IN_FLIGHT) await Promise.race(inflight);
     }
-    const res = await gmail(acct, "GET", "threads", { q: state.query, maxResults: 100, pageToken, fields: "threads(id),nextPageToken" });
-    const ids: string[] = (res.threads || []).map((t: any) => t.id);
-    const fresh = ids.filter((id) => !seen.has(id)).slice(0, Math.min(left, 100));
-    if (!fresh.length) {
-      // The search hasn't caught up with what's already in Trash: look further down, or stop.
-      if (res.nextPageToken) {
-        pageToken = res.nextPageToken;
-        continue;
+    if (all) await Promise.all(inflight);
+  };
+
+  report();
+  for (let sweep = 0; sweep <= MAX_SWEEPS && seen.size < cap; sweep++) {
+    const before = seen.size;
+    let next: string | undefined;
+    do {
+      const page = await listPage(acct, p.query, next);
+      for (const id of page.ids) {
+        if (seen.size >= cap) break;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        queue.push(id);
       }
-      state.done = true;
-      break;
-    }
-    await pool(fresh, async (id) => {
-      seen.add(id);
-      try {
-        await gmail(acct, "POST", `threads/${id}/trash`, { fields: "id" });
-        state.trashed++;
-      } catch {
-        state.failed++;
+      next = page.next;
+      if (!p.totalSure) p.total = Math.max(p.total, seen.size);
+      if (sweep === 0 && !next) {
+        // The first pass reached the end of the search: now the total is known.
+        p.total = Math.min(cap, seen.size);
+        p.totalSure = true;
       }
-    });
-    pageToken = undefined;
+      report();
+      await drain(false);
+      // A whole batch failing for a reason that won't go away (no permission, say): stop instead of pressing on.
+      if (lastError && !p.trashed) break;
+    } while (next && seen.size < cap);
+    await drain(true);
+    if (lastError && !p.trashed) break;
+    if (seen.size === before) break; // the search came back with nothing new: all done
   }
-  state.seen = [...seen];
-  const failed = state.failed ? ` ${count(state.failed, "conversation")} couldn't be moved.` : "";
-  state.message = state.done
-    ? (state.trashed
-        ? `Moved ${count(state.trashed, "conversation")} to Trash in ${acct.e}.`
-        : `Nothing left to move: no conversations match in ${acct.e}.`) +
-      failed +
-      (state.trashed
-        ? " They stay in Trash for 30 days, then Gmail deletes them; the space frees up then, or straight away if you empty the Trash."
-        : "")
-    : `Moving to Trash in ${acct.e}: ${state.trashed.toLocaleString("en-US")}${state.limit ? ` of ${state.limit.toLocaleString("en-US")}` : ""} so far. Carrying on…`;
-  return state;
+
+  if (lastError && !p.trashed) throw lastError;
+  p.total = p.trashed + p.failed;
+  p.totalSure = true;
+  p.done = true;
+  p.ended = Date.now();
+  report();
+  return { ...p };
 }

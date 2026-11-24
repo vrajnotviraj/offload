@@ -35,7 +35,7 @@ export default function Privacy() {
           </p>
           <p>
             <b>Gmail</b>, only if you open Gmail cleanup, and only for the accounts you choose. It uses Google&rsquo;s gmail.modify
-            permission, which lets it search your mail and move conversations to Trash but not delete anything for good. To show
+            permission, which lets it search your mail and move emails to Trash but not delete anything for good. To show
             what a search found, it reads only the subject, sender and date of the newest 20 matches. It never reads, keeps or
             sends what your emails say.
           </p>
@@ -78,7 +78,7 @@ export default function Privacy() {
             sender keeps edit access. Nothing is deleted, and you can move things back.
           </p>
           <p>
-            In Gmail cleanup, it moves the conversations you confirm to Trash, leaving starred and important ones alone unless you
+            In Gmail cleanup, it moves the emails you confirm to Trash, leaving starred and important ones alone unless you
             say otherwise. It never deletes email for good: Gmail does that after 30 days, or you do it by emptying the Trash.
           </p>
           <p>

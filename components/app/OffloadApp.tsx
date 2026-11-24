@@ -29,13 +29,14 @@ import {
   gmailQuery,
   gmailSearchUrl,
   gmailTrashUrl,
-  startTrash,
-  trashSlice,
+  trashMatching,
   type GmailFilter,
+  type GmailPreview,
   type GmailSearch,
-  type TrashState,
+  type TrashProgress,
 } from "@/lib/gmail/engine";
 import { Mark } from "@/components/Logo";
+import { TrashFlight } from "@/components/app/TrashFlight";
 
 const MAX_ACCOUNTS = 5;
 type Store = Awaited<ReturnType<typeof storage>>;
@@ -45,7 +46,7 @@ type Sel = { id: string; name: string; folder: boolean; bytes: number | null; fi
 type Job =
   | { kind: "transfer"; from: string; to: string; result: TransferResult | null; running: boolean; error: string; started: number; expected: number | null }
   | { kind: "accept"; to: string; result: AcceptResult | null; running: boolean; error: string }
-  | { kind: "gmail"; email: string; result: TrashState | null; running: boolean; error: string }
+  | { kind: "gmail"; email: string; result: TrashProgress | null; running: boolean; error: string }
   | { kind: "photos"; from: string; to: string; result: CopyProgress | null; running: boolean; error: string };
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -209,16 +210,16 @@ export default function OffloadApp({ clientId }: { clientId: string }) {
     }
   };
 
-  const runTrash = async (acct: Account, search: GmailSearch, limit: number) => {
+  const runTrash = async (acct: Account, search: GmailSearch, limit: number, expected: number) => {
     const base = { kind: "gmail" as const, email: acct.e };
     setJob({ ...base, result: null, running: true, error: "" });
     try {
-      let st = await trashSlice(acct, startTrash(search, limit));
-      setJob({ ...base, result: st, running: !st.done, error: "" });
-      while (!st.done) {
-        st = await trashSlice(acct, st);
-        setJob({ ...base, result: st, running: !st.done, error: "" });
-      }
+      const st = await trashMatching(acct, search, {
+        limit,
+        expected,
+        onProgress: (p) => setJob({ ...base, result: p, running: !p.done, error: "" }),
+      });
+      setJob({ ...base, result: st, running: false, error: "" });
       loadStorage([acct]);
       setReload((n) => n + 1);
     } catch (e) {
@@ -453,10 +454,13 @@ export default function OffloadApp({ clientId }: { clientId: string }) {
           }
           onClose={job.running ? undefined : () => setJob(null)}
         >
-          {job.running && <div className="oa-strip" aria-hidden="true" />}
-          <p className="oa-msg" aria-live="polite">
-            {job.result?.message || (job.running ? "Getting started…" : "")}
-          </p>
+          {job.running && job.kind !== "gmail" && <div className="oa-strip" aria-hidden="true" />}
+          {job.kind === "gmail" && <TrashFlight p={job.result} running={job.running} />}
+          {!(job.kind === "gmail" && job.running) && (
+            <p className={job.kind === "gmail" ? "oa-fine" : "oa-msg"} aria-live="polite">
+              {job.result?.message || (job.running ? "Getting started…" : "")}
+            </p>
+          )}
           {job.error && <p className="oa-note bad">{job.error}</p>}
           {job.kind === "transfer" && job.running && <Pace job={job} />}
           {job.kind === "transfer" && job.result && job.result.moved_this_step.length > 0 && job.running && (
@@ -1020,7 +1024,7 @@ function PhotosTab({ from, to, onCopy }: { from: Account; to: Account; onCopy: (
 
 /* --------------------------------------------------------------------- */
 
-type Preview = Awaited<ReturnType<typeof gmailPreview>>;
+type Preview = GmailPreview;
 
 function GmailTab({
   accounts,
@@ -1033,7 +1037,7 @@ function GmailTab({
   initial: string;
   stor: Record<string, Store | { error: string } | "loading">;
   reloadKey: number;
-  onTrash: (a: Account, s: GmailSearch, limit: number) => void;
+  onTrash: (a: Account, s: GmailSearch, limit: number, expected: number) => void;
 }) {
   const [email, setEmail] = useState(initial || accounts[0].e);
   const acct = accounts.find((a) => a.e === email) || accounts[0];
@@ -1069,9 +1073,17 @@ function GmailTab({
     setLoading(true);
     setError("");
     const t = setTimeout(async () => {
+      const alive = () => id === seq.current;
       try {
-        const r = await gmailPreview(acct, search);
-        if (id === seq.current) setRes(r);
+        const r = await gmailPreview(acct, search, {
+          alive,
+          onUpdate: (p) => {
+            if (!alive()) return;
+            setRes(p);
+            setLoading(false);
+          },
+        });
+        if (alive()) setRes(r);
       } catch (e) {
         if (id !== seq.current) return;
         if (e instanceof ScopeNeededError) setAllowed(false);
@@ -1079,14 +1091,15 @@ function GmailTab({
       } finally {
         if (id === seq.current) setLoading(false);
       }
-    }, 450);
+    }, 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, acct.e, allowed, reloadKey]);
 
   const st = stor[acct.e];
   const ok = st && st !== "loading" && !("error" in st) ? st : null;
-  const n = res ? (res.capped ? `all ${res.count.toLocaleString("en-US")}+` : res.count.toLocaleString("en-US")) : "";
+  const more = !!res && (res.capped || res.counting);
+  const n = res ? (more ? `all ${res.count.toLocaleString("en-US")}+` : res.count.toLocaleString("en-US")) : "";
   const toggleFilter = (k: GmailFilter) => setFilters((f) => (f.includes(k) ? f.filter((x) => x !== k) : [...f, k]));
 
   return (
@@ -1108,7 +1121,7 @@ function GmailTab({
           <h3>Let Offload tidy Gmail for {acct.e}</h3>
           <p>
             Old promotions, newsletters and big attachments use the same storage as your Drive. Offload can search your mail,
-            show the subject and sender of the newest matches, and move the conversations you confirm to Trash. It can&rsquo;t
+            show the subject and sender of the newest matches, and move the emails you confirm to Trash. It can&rsquo;t
             delete anything for good, and it never reads what your emails say.
           </p>
           <button
@@ -1161,31 +1174,29 @@ function GmailTab({
             ) : res ? (
               <>
                 <p className="oa-gm-count">
-                  <b>{res.capped ? `${res.count.toLocaleString("en-US")}+` : res.count.toLocaleString("en-US")}</b>{" "}
-                  {res.count === 1 && !res.capped ? "conversation matches" : "conversations match"}
-                  {loading && <span className="oa-gm-busy"> · updating…</span>}
+                  <b>{more ? `${res.count.toLocaleString("en-US")}+` : res.count.toLocaleString("en-US")}</b>{" "}
+                  {res.count === 1 && !more ? "email matches" : "emails match"}
+                  {res.counting ? <span className="oa-gm-busy"> · still counting…</span> : loading && <span className="oa-gm-busy"> · updating…</span>}
                   <a href={gmailSearchUrl(acct.e, res.query)} target="_blank" rel="noreferrer">
                     See them in Gmail
                   </a>
                 </p>
-                {res.items.length > 0 && (
+                {!res.items && res.count > 0 && <p className="oa-loading">Loading the newest ones…</p>}
+                {res.items && res.items.length > 0 && (
                   <ul className="oa-list oa-gm-list">
                     {res.items.map((m) => (
                       <li key={m.id}>
                         <MailIcon />
                         <span className="oa-gm-main">
                           <span className="oa-gm-subj">{m.subject}</span>
-                          <span className="oa-gm-sub">
-                            {m.from}
-                            {m.messages > 1 ? ` · ${m.messages} messages` : ""}
-                          </span>
+                          <span className="oa-gm-sub">{m.from}</span>
                         </span>
                         <span className="oa-date">{date(m.date)}</span>
                       </li>
                     ))}
                   </ul>
                 )}
-                {res.count > res.items.length && <p className="oa-fine">Showing the newest {res.items.length}.</p>}
+                {res.items && res.count > res.items.length && <p className="oa-fine">Showing the newest {res.items.length}.</p>}
                 {res.count > 0 && (
                   <div className="oa-actions">
                     {!confirm ? (
@@ -1194,8 +1205,8 @@ function GmailTab({
                       </button>
                     ) : (
                       <>
-                        <button className="btn btn-danger" onClick={() => onTrash(acct, search, res.capped ? 0 : res.count)}>
-                          Yes, move {n} conversations to Trash
+                        <button className="btn btn-danger" onClick={() => onTrash(acct, search, more ? 0 : res.count, res.count)}>
+                          Yes, move {n} {res.count === 1 && !more ? "email" : "emails"} to Trash
                         </button>
                         <button className="btn btn-quiet" onClick={() => setConfirm(false)}>
                           Cancel
