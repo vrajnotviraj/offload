@@ -44,6 +44,31 @@ export function requireLibrary(acct: Account) {
 }
 
 /* ===================================================================== *
+ * New albums
+ * ===================================================================== */
+
+/**
+ * Makes an empty album in `acct`'s Google Photos. Add-only access means Offload can fill it only with photos it adds
+ * itself (copy_google_photos); the person can add any of their own photos to it in Google Photos.
+ */
+export async function createAlbum(acct: Account, title: string) {
+  requireLibrary(acct);
+  const clean = title.replace(/\s+/g, " ").trim();
+  if (!clean) throw new Error("Give the album a name.");
+  if (clean.length > 500) throw new Error("Album names can be at most 500 characters.");
+  const a = await callGoogle(LIBRARY, LIBRARY_SCOPE, acct, "POST", "albums", {}, { album: { title: clean } });
+  return {
+    message:
+      `Made an empty album "${clean}" in ${acct.e}'s Google Photos. ` +
+      "Add photos to it in Google Photos (open the album and choose Add photos); Offload can only put in photos it copies there itself.",
+    account: acct.e,
+    album_id: String(a.id),
+    title: clean,
+    link: a.productUrl || "",
+  };
+}
+
+/* ===================================================================== *
  * Timelines
  * ===================================================================== */
 

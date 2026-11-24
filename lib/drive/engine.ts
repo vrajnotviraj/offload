@@ -758,3 +758,41 @@ export async function acceptPending(receiver: Account, ids: string[], budgetMs =
     : `Still accepting into ${receiver.e}: ${count(out.accepted, "item")} so far (${human(out.bytes)}). Carrying on…`;
   return out;
 }
+
+/* ===================================================================== *
+ * New folders
+ * ===================================================================== */
+
+/** Makes an empty folder in `acct`'s Drive: in My Drive, or inside `parentId` if given. */
+export async function createFolder(acct: Account, name: string, parentId?: string) {
+  const clean = name.replace(/\s+/g, " ").trim();
+  if (!clean) throw new Error("Give the folder a name.");
+  let parent = { id: "root", name: "My Drive" };
+  if (parentId && parentId !== "root") {
+    if (!ID_RE.test(parentId)) throw new Error(`${parentId} isn't a Drive folder ID. find_files with kind=folders lists folder IDs.`);
+    let p: { id: string; name: string; mimeType: string; trashed?: boolean };
+    try {
+      p = await drive(acct, "GET", `files/${parentId}`, { fields: "id,name,mimeType,trashed", supportsAllDrives: true });
+    } catch {
+      throw new Error(`${acct.e} can't see a folder with ID ${parentId}. find_files with kind=folders lists the folders in each account.`);
+    }
+    if (p.mimeType !== FOLDER_MIME) throw new Error(`"${p.name}" is a file, not a folder. Pick a folder to put the new one in.`);
+    if (p.trashed) throw new Error(`"${p.name}" is in the Trash. Pick another folder, or restore it first.`);
+    parent = { id: p.id, name: p.name };
+  }
+  const f = await drive<{ id: string; name: string; webViewLink?: string }>(
+    acct,
+    "POST",
+    "files",
+    { fields: "id,name,webViewLink", supportsAllDrives: true },
+    { name: clean, mimeType: FOLDER_MIME, parents: [parent.id] }
+  );
+  return {
+    message: `Made an empty folder "${f.name}" in ${parent.id === "root" ? "My Drive" : `"${parent.name}"`} in ${acct.e}.`,
+    account: acct.e,
+    folder_id: f.id,
+    name: f.name,
+    inside: parent.id === "root" ? "My Drive" : parent.name,
+    link: f.webViewLink || `https://drive.google.com/drive/folders/${f.id}`,
+  };
+}
