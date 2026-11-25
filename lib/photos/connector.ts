@@ -588,7 +588,7 @@ export async function copyPickedServer(
           ? [
               toDrive
                 ? `The originals are still in ${from.e}'s Google Photos, and the copies use ${to.e}'s storage.`
-                : `The originals are still in ${from.e}. Check the copies, then delete the originals in Google Photos to free the space there.`,
+                : `The originals are still in ${from.e}'s Google Photos: check the copies first.`,
             ]
           : []),
       ].join(" ")

@@ -24,6 +24,7 @@ import {
   type PickToken,
   type Preview,
 } from "@/lib/photos/connector";
+import { CANT_DELETE_PHOTOS, googlePhotosUrl } from "@/lib/photos/engine";
 import { MAX_GROUPS, runSort, sortResult, startSort, type SortState } from "@/lib/photos/sort";
 
 /** How long one transfer_files call works before handing back a continue_token. */
@@ -62,11 +63,26 @@ Photos come in two kinds, and Google treats them differently:
 - add_to_photos_album puts copies Offload made (ids from copy_google_photos's copies) into another album Offload made, in the same account. A photo in several albums is one copy and uses no extra storage, so copy each photo once and add it to the rest of its albums with add_to_photos_album, rather than copying it again.
 - What Google doesn't allow, so don't offer it: listing or reading the person's albums, adding to albums they made in Google Photos, putting photos that were already in an account into an album, deleting anything from Google Photos. Offload only ever adds its own copies to its own albums; the person adds their existing photos in Google Photos.
 - Sorting photos into groups (one per person, place, trip, anything): pick → show_photos (every page, with offset) → you work out the groups from what you see and list them for the person by item number, with a short description of each group rather than a name you guess → they confirm or correct → sort_photos with the groups. It makes an album and/or Drive folder per group in the receiving account, copies each photo once, and files it into every group it belongs to (one copy in several albums; in Drive, the file in its first group's folder and shortcuts in the rest). Offload itself doesn't recognise anyone: the groups are what you and the person agreed. Say when a match is a guess (small previews, similar outfits), and never name a person the person hasn't named. For one-off filing, create_photos_album / create_drive_folder, copy_google_photos and add_to_photos_album / add_to_drive_folder still work step by step.
-- If a tool says an account hasn't allowed Google Photos, pass on its message: the person reconnects Offload and leaves the Google Photos boxes ticked.`;
+- If a tool says an account hasn't allowed Google Photos, pass on its message: the person reconnects Offload and leaves the Google Photos boxes ticked.
+- Offload can't delete anything from Google Photos, and Google doesn't let any app do it. Every Google Photos result's message ends by saying so, with a link to the account's Google Photos: always pass that part on, after every Google Photos action, so the person knows deleting the originals (to free the space) is something they do themselves in Google Photos. Never offer to delete them or suggest Offload will.`;
 
 function text(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
+
+/** Ends a Google Photos result's message with the reminder that Offload can't delete from Google Photos, and links `email`'s. */
+function withPhotosNote<T extends object>(data: T, email?: string) {
+  const link = email ? googlePhotosUrl(email) : "https://photos.google.com";
+  const note = `${CANT_DELETE_PHOTOS} ${email ? `${email}'s Google Photos` : "Google Photos"}: ${link}`;
+  const message = (data as { message?: unknown }).message;
+  return {
+    ...data,
+    message: typeof message === "string" && message ? `${message} ${note}` : note,
+    deleting_google_photos: { offload_can_delete: false, note: CANT_DELETE_PHOTOS, open_google_photos: link },
+  };
+}
+
+const photosText = (data: object, email?: string) => text(withPhotosNote(data, email));
 
 function failure(e: unknown) {
   return { isError: true, content: [{ type: "text" as const, text: e instanceof Error ? e.message : String(e) }] };
@@ -389,13 +405,16 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
       try {
         const idx = args.account ? indexOf(args.account) : 0;
         const { token: t, url } = await startPick(accounts, idx);
-        return text({
-          message: `Open this link to choose photos from ${accounts[idx].e}'s Google Photos, then press Done and tell me: ${url}`,
-          picker_url: url,
-          account: accounts[idx].e,
-          photos_session: packCursor(t),
-          note: "Ask the person to say when they've finished picking, then call picked_photos. The link works for a limited time.",
-        });
+        return photosText(
+          {
+            message: `Open this link to choose photos from ${accounts[idx].e}'s Google Photos, then press Done and tell me: ${url}`,
+            picker_url: url,
+            account: accounts[idx].e,
+            photos_session: packCursor(t),
+            note: "Ask the person to say when they've finished picking, then call picked_photos. The link works for a limited time.",
+          },
+          accounts[idx].e
+        );
       } catch (e) {
         return failure(e);
       }
@@ -420,12 +439,15 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
         const t = openPick(args.photos_session);
         const r = await picked(accounts, t);
         if (!r.ready) {
-          return text({
-            message: `Nothing picked yet: open the link from pick_google_photos, choose photos in ${accounts[t.a].e}'s Google Photos and press Done, then tell me.`,
-            ready: false,
-          });
+          return photosText(
+            {
+              message: `Nothing picked yet: open the link from pick_google_photos, choose photos in ${accounts[t.a].e}'s Google Photos and press Done, then tell me.`,
+              ready: false,
+            },
+            accounts[t.a].e
+          );
         }
-        return text({ ready: true, ...pickedResult(r.items, accounts, t.a, args.group_by) });
+        return photosText({ ready: true, ...pickedResult(r.items, accounts, t.a, args.group_by) }, accounts[t.a].e);
       } catch (e) {
         return failure(e);
       }
@@ -458,7 +480,7 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
         if (args.photos_session) {
           const t = openPick(args.photos_session);
           const r = await picked(accounts, t);
-          if (!r.ready) return text({ message: "Nothing picked yet: ask the person to finish picking and press Done.", ready: false });
+          if (!r.ready) return photosText({ message: "Nothing picked yet: ask the person to finish picking and press Done.", ready: false }, accounts[t.a].e);
           const match = inPeriod(r.items, args.period);
           const slice = match.slice(args.offset, args.offset + args.limit);
           const previews = await pickedPreviews(accounts[t.a], slice, token, slice.map((it) => r.items.indexOf(it) + 1));
@@ -468,12 +490,15 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
             : `Showing ${count(previews.length, "preview")} of ${count(match.length, "picked item")}` +
               (args.period ? ` from ${args.period}` : "") + (shown < match.length ? `; pass offset ${shown} for the next ones.` : ".");
           return previewContent(
-            {
-              message,
-              previews: previews.map((p) => ({ item: p.item, name: p.name, taken: p.taken, video: p.video })),
-              note: "item is each one's number in the whole pick, in the same order as the images. copy_google_photos takes these numbers as items.",
-              ...(shown < match.length ? { next_offset: shown } : {}),
-            },
+            withPhotosNote(
+              {
+                message,
+                previews: previews.map((p) => ({ item: p.item, name: p.name, taken: p.taken, video: p.video })),
+                note: "item is each one's number in the whole pick, in the same order as the images. copy_google_photos takes these numbers as items.",
+                ...(shown < match.length ? { next_offset: shown } : {}),
+              },
+              accounts[t.a].e
+            ),
             previews
           );
         }
@@ -544,7 +569,7 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
           }
           if (to === t.a && !toDrive) throw new Error("Pick a different account to copy to: that's the one the photos are in.");
           const r = await picked(accounts, t);
-          if (!r.ready) return text({ message: "Nothing picked yet: ask the person to finish picking and press Done.", done: false });
+          if (!r.ready) return photosText({ message: "Nothing picked yet: ask the person to finish picking and press Done.", done: false }, accounts[t.a].e);
           let pick: number[] | null = null;
           if (args.items?.length) {
             const outside = args.items.filter((n) => n > r.items.length);
@@ -579,7 +604,7 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
         }
         const { done, message, made } = await copyPickedServer(accounts, st, PHOTOS_BUDGET_MS, token);
         const res = copyResult(st, accounts, done, message, made);
-        return text(done ? res : { ...res, continue_token: packCursor(st) });
+        return photosText(done ? res : { ...res, continue_token: packCursor(st) }, accounts[st.a].e);
       } catch (e) {
         return failure(e);
       }
@@ -602,7 +627,8 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
     },
     async (args) => {
       try {
-        return text(await createAlbum(args.account ? find(args.account) : main, args.title));
+        const acct = args.account ? find(args.account) : main;
+        return photosText(await createAlbum(acct, args.title), acct.e);
       } catch (e) {
         return failure(e);
       }
@@ -628,7 +654,7 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
       try {
         const acct = args.account ? find(args.account) : null;
         if (!acct) throw new Error("Which account's Google Photos is the album in? Pass account (the to account from copy_google_photos).");
-        return text(await addToAlbum(acct, args.album_id.trim(), args.media_item_ids));
+        return photosText(await addToAlbum(acct, args.album_id.trim(), args.media_item_ids), acct.e);
       } catch (e) {
         return failure(e);
       }
@@ -688,12 +714,12 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
             throw new Error(`Which account should receive the sorted copies? Pass to_account: one of ${options}.`);
           }
           const s = await startSort(accounts, t, { to, dests, groups: args.groups, title: args.title, parentId: args.parent_id });
-          if (!s.ready) return text({ message: "Nothing picked yet: ask the person to finish picking and press Done.", done: false });
+          if (!s.ready) return photosText({ message: "Nothing picked yet: ask the person to finish picking and press Done.", done: false }, accounts[t.a].e);
           st = s.st;
         }
         const done = await runSort(accounts, st, PHOTOS_BUDGET_MS, token);
         const res = sortResult(st, accounts, done);
-        return text(done ? res : { ...res, continue_token: packCursor(st) });
+        return photosText(done ? res : { ...res, continue_token: packCursor(st) }, accounts[st.a].e);
       } catch (e) {
         return failure(e);
       }

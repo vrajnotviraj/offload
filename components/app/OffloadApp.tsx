@@ -22,7 +22,19 @@ import {
 } from "@/lib/drive/engine";
 import { allowGmail, allowScope, hasGmail, hasScope, initBrowserAuth, onReauthNeeded, reauth, signIn, signOut, tokenFor } from "@/lib/drive/browserAuth";
 import { LIBRARY_SCOPE, PICKER_SCOPE, ScopeNeededError } from "@/lib/drive/api";
-import { copyPicked, endPicking, listPicked, MAX_PICK, pollPicking, relayViaSite, startPicking, type CopyProgress, type Picked } from "@/lib/photos/engine";
+import {
+  CANT_DELETE_PHOTOS,
+  copyPicked,
+  endPicking,
+  googlePhotosUrl,
+  listPicked,
+  MAX_PICK,
+  pollPicking,
+  relayViaSite,
+  startPicking,
+  type CopyProgress,
+  type Picked,
+} from "@/lib/photos/engine";
 import {
   GMAIL_FILTERS,
   gmailPreview,
@@ -462,6 +474,7 @@ export default function OffloadApp({ clientId }: { clientId: string }) {
             </p>
           )}
           {job.error && <p className="oa-note bad">{job.error}</p>}
+          {job.kind === "photos" && <p className="oa-note">{CANT_DELETE_PHOTOS}</p>}
           {job.kind === "transfer" && job.running && <Pace job={job} />}
           {job.kind === "transfer" && job.result && job.result.moved_this_step.length > 0 && job.running && (
             <p className="oa-fine">Just moved: {job.result.moved_this_step.slice(-5).join(", ")}</p>
@@ -488,6 +501,11 @@ export default function OffloadApp({ clientId }: { clientId: string }) {
               {job.kind === "photos" && job.result && job.result.copied > 0 && job.result.albumUrl && (
                 <a className="btn btn-quiet" href={job.result.albumUrl} target="_blank" rel="noreferrer">
                   Open the album
+                </a>
+              )}
+              {job.kind === "photos" && (
+                <a className="btn btn-quiet" href={googlePhotosUrl(job.from)} target="_blank" rel="noreferrer">
+                  Open {job.from}&rsquo;s Google Photos
                 </a>
               )}
               {job.kind === "gmail" && job.result && job.result.trashed > 0 && (
@@ -933,8 +951,15 @@ function PhotosTab({ from, to, onCopy }: { from: Account; to: Account; onCopy: (
     <div className="oa-ph">
       <p className="oa-hint">
         Google Photos can&rsquo;t hand photos to another account, so Offload copies the ones you pick into <b>{to.e}</b>&rsquo;s
-        Google Photos, in an album called &ldquo;Copied from {from.e}&rdquo;. Your originals stay where they are: delete them once
-        you&rsquo;ve checked the copies, and that frees the space. Up to {MAX_PICK.toLocaleString("en-US")} at a time.
+        Google Photos, in an album called &ldquo;Copied from {from.e}&rdquo;. Your originals stay where they are. Up to{" "}
+        {MAX_PICK.toLocaleString("en-US")} at a time.
+      </p>
+      <p className="oa-note">
+        {CANT_DELETE_PHOTOS} Check the copies first, then delete the originals in{" "}
+        <a href={googlePhotosUrl(from.e)} target="_blank" rel="noreferrer">
+          {from.e}&rsquo;s Google Photos
+        </a>
+        .
       </p>
       {(!canPick || !canAdd) && (
         <ol className="oa-ph-steps">

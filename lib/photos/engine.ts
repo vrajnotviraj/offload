@@ -13,6 +13,19 @@ import type { RelayRequest, RelayResponse } from "./relay";
 const PICKER = "https://photospicker.googleapis.com/v1";
 const LIBRARY = "https://photoslibrary.googleapis.com/v1";
 export const MAX_PICK = 2000;
+
+/**
+ * Google doesn't let any app delete from Google Photos, so after every Google Photos action (in the app and the
+ * connector) Offload says so plainly: freeing the space by deleting the originals is something the person does.
+ */
+export const CANT_DELETE_PHOTOS =
+  "Offload can't delete anything from Google Photos (Google doesn't let apps do that). To free up space, delete the photos yourself in Google Photos.";
+
+/** Google Photos, signed in as `email`: where the person deletes their originals. */
+export function googlePhotosUrl(email: string) {
+  return `https://photos.google.com/?authuser=${encodeURIComponent(email)}`;
+}
+
 const URL_TTL_MS = 45 * 60 * 1000; // picked items' download links last 60 minutes
 const BATCH = 50; // Google's most per batchCreate call
 const PARALLEL = 6; // items copied at the same time
@@ -326,7 +339,7 @@ function doneMessage(p: CopyProgress, from: string, to: string): string {
   );
   if (p.skipped) parts.push(`Skipped ${count(p.skipped, "item")} already copied earlier.`);
   if (p.failed) parts.push(`${count(p.failed, "item")} couldn't be copied: see problems.`);
-  if (p.copied) parts.push(`Your originals are still in ${from}. Check the copies, then delete the originals in Google Photos to free the space there.`);
+  if (p.copied) parts.push(`Your originals are still in ${from}'s Google Photos: check the copies first.`);
   return parts.join(" ");
 }
 
