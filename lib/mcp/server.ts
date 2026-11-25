@@ -24,6 +24,7 @@ import {
   type PickToken,
   type Preview,
 } from "@/lib/photos/connector";
+import { MAX_GROUPS, runSort, sortResult, startSort, type SortState } from "@/lib/photos/sort";
 
 /** How long one transfer_files call works before handing back a continue_token. */
 const TRANSFER_BUDGET_MS = 40_000;
@@ -52,7 +53,7 @@ Photos come in two kinds, and Google treats them differently:
 - create_photos_album makes an empty album in a linked account's Google Photos and returns its album_id.
 - add_to_photos_album puts copies Offload made (ids from copy_google_photos's copies) into another album Offload made, in the same account. A photo in several albums is one copy and uses no extra storage, so copy each photo once and add it to the rest of its albums with add_to_photos_album, rather than copying it again.
 - What Google doesn't allow, so don't offer it: listing or reading the person's albums, adding to albums they made in Google Photos, putting photos that were already in an account into an album, deleting anything from Google Photos. Offload only ever adds its own copies to its own albums; the person adds their existing photos in Google Photos.
-- Sorting photos into albums or folders (for example one per person): pick → show_photos → agree which item numbers go where → for albums, create_photos_album once per group in the receiving account, copy_google_photos with all the items into one of them (or its own album), then add_to_photos_album for every other album each copy belongs in. For Drive folders, create_drive_folder once per group, copy_google_photos with to=drive into one folder, then add_to_drive_folder with how=shortcut for the other folders each file belongs in.
+- Sorting photos into groups (one per person, place, trip, anything): pick → show_photos (every page, with offset) → you work out the groups from what you see and list them for the person by item number, with a short description of each group rather than a name you guess → they confirm or correct → sort_photos with the groups. It makes an album and/or Drive folder per group in the receiving account, copies each photo once, and files it into every group it belongs to (one copy in several albums; in Drive, the file in its first group's folder and shortcuts in the rest). Offload itself doesn't recognise anyone: the groups are what you and the person agreed. Say when a match is a guess (small previews, similar outfits), and never name a person the person hasn't named. For one-off filing, create_photos_album / create_drive_folder, copy_google_photos and add_to_photos_album / add_to_drive_folder still work step by step.
 - If a tool says an account hasn't allowed Google Photos, pass on its message: the person reconnects Offload and leaves the Google Photos boxes ticked.`;
 
 function text(data: unknown) {
@@ -69,7 +70,7 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
     {
       name: "offload",
       title: "Offload",
-      version: "1.4.0",
+      version: "1.5.0",
       description:
         "Move Google Drive files between your Google accounts, see how much space each one has, browse your photos month by month and year by year, copy Google Photos to another account's Google Photos or Drive, and sort them into new albums and folders.",
       ...(site
@@ -620,6 +621,71 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
         const acct = args.account ? find(args.account) : null;
         if (!acct) throw new Error("Which account's Google Photos is the album in? Pass account (the to account from copy_google_photos).");
         return text(await addToAlbum(acct, args.album_id.trim(), args.media_item_ids));
+      } catch (e) {
+        return failure(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "sort_photos",
+    {
+      title: "Sort picked Google Photos into albums or folders",
+      description:
+        "Sorts photos picked with pick_google_photos into groups you and the person agreed (for example one per person in them), in another " +
+        "linked account: an album per group in its Google Photos (to=photos), a folder per group in its Google Drive (to=drive, inside one " +
+        "parent folder), or both. Each photo is copied once and filed into every group it's in, so a photo in several groups uses its storage " +
+        "once. Also makes an album (or the parent folder) called title holding every sorted photo. Groups are item numbers from show_photos; " +
+        "Offload doesn't recognise faces itself. Confirm the groups and the account with the person first. Big jobs run in steps: while done " +
+        "is false, call again with only continue_token.",
+      inputSchema: {
+        photos_session: z.string().optional().describe("From pick_google_photos. Not needed with continue_token."),
+        groups: z
+          .array(
+            z.object({
+              name: z.string().min(1).max(200).describe("The album or folder name, e.g. \"Person 1\" or a name the person gave."),
+              items: z.array(z.number().int().min(1)).min(1).max(2000).describe("Item numbers (from show_photos) of the photos in this group."),
+            })
+          )
+          .min(1)
+          .max(MAX_GROUPS)
+          .optional()
+          .describe("One entry per album or folder. A photo can be in several groups. Not needed with continue_token."),
+        to: z.enum(["photos", "drive", "both"]).default("photos").describe("photos = albums in Google Photos; drive = folders in Google Drive; both."),
+        to_account: emailArg(
+          two
+            ? "Account that receives the sorted copies. Defaults to the other linked account. With to=drive it can be the same account."
+            : "Account that receives the sorted copies. Required: ask the person if they haven't said. With to=drive it can be the same account."
+        ),
+        title: z.string().min(1).max(255).optional().describe("Name for the album of all sorted photos and the parent Drive folder. Defaults to \"Sorted from <account>\"."),
+        parent_id: z.string().optional().describe("to=drive or both: a folder in the receiving account's Drive to make the parent folder in. Defaults to My Drive."),
+        continue_token: z.string().optional().describe("From a previous call that returned done: false."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async (args) => {
+      try {
+        let st: SortState;
+        if (args.continue_token) st = unpackCursor<SortState>(args.continue_token, "psort");
+        else {
+          if (!args.photos_session) throw new Error("Pass the photos_session from pick_google_photos.");
+          if (!args.groups?.length) throw new Error("Pass groups: a name and item numbers for each album or folder.");
+          const t = openPick(args.photos_session);
+          const dests: ("photos" | "drive")[] = args.to === "both" ? ["photos", "drive"] : [args.to];
+          let to: number;
+          if (args.to_account) to = indexOf(args.to_account);
+          else if (two) to = t.a === 0 ? 1 : 0;
+          else {
+            const options = accounts.filter((_, i) => i !== t.a).map((x) => x.e).join(", ");
+            throw new Error(`Which account should receive the sorted copies? Pass to_account: one of ${options}.`);
+          }
+          const s = await startSort(accounts, t, { to, dests, groups: args.groups, title: args.title, parentId: args.parent_id });
+          if (!s.ready) return text({ message: "Nothing picked yet: ask the person to finish picking and press Done.", done: false });
+          st = s.st;
+        }
+        const done = await runSort(accounts, st, PHOTOS_BUDGET_MS, token);
+        const res = sortResult(st, accounts, done);
+        return text(done ? res : { ...res, continue_token: packCursor(st) });
       } catch (e) {
         return failure(e);
       }
