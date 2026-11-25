@@ -6,7 +6,8 @@ import { addToAlbum, copyPickedServer, createAlbum, picked, requireLibrary, requ
  * Sorting picked Google Photos into groups (one album and/or Drive folder per group), in one job.
  *
  * Offload doesn't decide who or what is in a photo: the AI looks at the previews (show_photos), agrees the groups with
- * the person, and passes them here as item numbers. No face data is made or kept. This module only does the filing:
+ * the person, and passes them here as item numbers (one group per person across the whole pick, matched by face, not outfit).
+ * No face data is made or kept. This module only does the filing:
  * each photo is copied once, then put in every group it belongs to (more albums for the same copy, or shortcuts in
  * Drive), so a photo in five groups still uses its storage once.
  */
@@ -26,6 +27,8 @@ type Lane = {
   folders?: { id: string; link: string }[];
   copy: CopyState | null;
   done: boolean;
+  /** Google Photos: [item, media item id] of each copy made, so later merges can file the same copy into more albums. */
+  made?: [number, string][];
 };
 
 export type SortState = {
@@ -203,7 +206,10 @@ export async function runSort(
     if (left <= 0) break;
     const { done, made } = await copyPickedServer(accounts, lane.copy!, left, token);
     if (lane.dest === "photos" && lane.copy!.album) lane.all = { id: lane.copy!.album.id, link: lane.copy!.album.url };
-    if (made.length) await file(st, lane, to, made);
+    if (made.length) {
+      if (lane.dest === "photos") lane.made = [...(lane.made || []), ...made.map((m): [number, string] => [m.item, m.id])];
+      await file(st, lane, to, made);
+    }
     if (!done) break;
     lane.done = true;
     st.lane++;
@@ -232,6 +238,7 @@ export function sortResult(st: SortState, accounts: Account[], done: boolean) {
         ...(l.dest === "photos" && l.albums ? { album_id: l.albums[gi].id, album: l.albums[gi].link } : {}),
         ...(l.dest === "drive" && l.folders ? { folder_id: l.folders[gi].id, folder: l.folders[gi].link || link(l.folders[gi].id) } : {}),
       })),
+      ...(l.dest === "photos" && done && l.made?.length ? { copies: l.made.map(([item, id]) => ({ item, id })) } : {}),
       ...(c?.errors.length ? { copy_problems: c.errors } : {}),
     };
   });

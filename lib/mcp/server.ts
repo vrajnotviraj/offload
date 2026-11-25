@@ -15,6 +15,8 @@ import {
   driveTimelineResult,
   inPeriod,
   MAX_PREVIEWS,
+  LARGE_PREVIEW_PX,
+  MAX_LARGE_PREVIEWS,
   pickedPreviews,
   pickedResult,
   picked,
@@ -62,7 +64,7 @@ Photos come in two kinds, and Google treats them differently:
 - create_photos_album makes an empty album in a linked account's Google Photos and returns its album_id.
 - add_to_photos_album puts copies Offload made (ids from copy_google_photos's copies) into another album Offload made, in the same account. A photo in several albums is one copy and uses no extra storage, so copy each photo once and add it to the rest of its albums with add_to_photos_album, rather than copying it again.
 - What Google doesn't allow, so don't offer it: listing or reading the person's albums, adding to albums they made in Google Photos, putting photos that were already in an account into an album, deleting anything from Google Photos. Offload only ever adds its own copies to its own albums; the person adds their existing photos in Google Photos.
-- Sorting photos into groups (one per person, place, trip, anything): pick → show_photos (every page, with offset) → you work out the groups from what you see and list them for the person by item number, with a short description of each group rather than a name you guess → they confirm or correct → sort_photos with the groups. It makes an album and/or Drive folder per group in the receiving account, copies each photo once, and files it into every group it belongs to (one copy in several albums; in Drive, the file in its first group's folder and shortcuts in the rest). Offload itself doesn't recognise anyone: the groups are what you and the person agreed. Say when a match is a guess (small previews, similar outfits), and never name a person the person hasn't named. For one-off filing, create_photos_album / create_drive_folder, copy_google_photos and add_to_photos_album / add_to_drive_folder still work step by step.
+- Sorting photos into groups (one per person, place, trip, anything): pick → show_photos (every page, with offset) → you work out the groups from what you see and list them for the person by item number, with a short description of each group rather than a name you guess → they confirm or correct → sort_photos with the groups. When grouping by person, make one group per person across the whole pick, not per outfit or day: people change clothes between days, so match them by face (show_photos with size=large on the photos you're unsure about, and compare faces, hair, glasses and build), and use clothing only to follow someone within one event. If a match across days is uncertain, say so and ask rather than splitting or merging silently. It makes an album and/or Drive folder per group in the receiving account, copies each photo once, and files it into every group it belongs to (one copy in several albums; in Drive, the file in its first group's folder and shortcuts in the rest). Offload itself doesn't recognise anyone: the groups are what you and the person agreed. Say when a match is a guess (small previews, similar outfits), and never name a person the person hasn't named. For one-off filing, create_photos_album / create_drive_folder, copy_google_photos and add_to_photos_album / add_to_drive_folder still work step by step.
 - If a tool says an account hasn't allowed Google Photos, pass on its message: the person reconnects Offload and leaves the Google Photos boxes ticked.
 - Offload can't delete anything from Google Photos, and Google doesn't let any app do it. Every Google Photos result's message ends by saying so, with a link to the account's Google Photos: always pass that part on, after every Google Photos action, so the person knows deleting the originals (to free the space) is something they do themselves in Google Photos. Never offer to delete them or suggest Offload will.`;
 
@@ -461,7 +463,8 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
       description:
         `Shows up to ${MAX_PREVIEWS} small previews in the chat, as images you can see and describe. Either pass ids (Drive photos or videos: ` +
         "preview_ids from photo_timeline, or IDs from find_files with kind=media), or a photos_session from pick_google_photos with an " +
-        "optional period (a year like 2019 or a month like 2019-07). Videos show a still frame.",
+        "optional period (a year like 2019 or a month like 2019-07). Videos show a still frame. size=large shows up to " +
+        `${MAX_LARGE_PREVIEWS} bigger previews (${LARGE_PREVIEW_PX}px), for comparing faces when telling people apart across photos.`,
       inputSchema: {
         ids: z.array(z.string()).max(MAX_PREVIEWS).optional().describe("Drive file IDs."),
         photos_session: z.string().optional().describe("From pick_google_photos, for picked Google Photos."),
@@ -472,18 +475,24 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
           .describe("With photos_session: only items taken in this year (2019) or month (2019-07)."),
         limit: z.number().int().min(1).max(MAX_PREVIEWS).default(8),
         offset: z.number().int().min(0).default(0).describe("With photos_session: skip this many, to see the next ones."),
+        size: z
+          .enum(["small", "large"])
+          .default("small")
+          .describe(`small = an overview; large = bigger previews (at most ${MAX_LARGE_PREVIEWS} per call) for matching faces across photos.`),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async (args) => {
       try {
+        const large = args.size === "large";
+        const px = large ? LARGE_PREVIEW_PX : undefined;
         if (args.photos_session) {
           const t = openPick(args.photos_session);
           const r = await picked(accounts, t);
           if (!r.ready) return photosText({ message: "Nothing picked yet: ask the person to finish picking and press Done.", ready: false }, accounts[t.a].e);
           const match = inPeriod(r.items, args.period);
-          const slice = match.slice(args.offset, args.offset + args.limit);
-          const previews = await pickedPreviews(accounts[t.a], slice, token, slice.map((it) => r.items.indexOf(it) + 1));
+          const slice = match.slice(args.offset, args.offset + Math.min(args.limit, large ? MAX_LARGE_PREVIEWS : args.limit));
+          const previews = await pickedPreviews(accounts[t.a], slice, token, slice.map((it) => r.items.indexOf(it) + 1), px);
           const shown = args.offset + slice.length;
           const message = !match.length
             ? `No picked photos ${args.period ? `from ${args.period}` : ""}.`.replace(" .", ".")
@@ -503,7 +512,7 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
           );
         }
         if (!args.ids?.length) throw new Error("Pass ids (Drive file IDs) or a photos_session.");
-        const { previews, missing } = await drivePreviews(accounts, args.ids.slice(0, args.limit), (a) => token(a));
+        const { previews, missing } = await drivePreviews(accounts, args.ids.slice(0, Math.min(args.limit, large ? MAX_LARGE_PREVIEWS : args.limit)), (a) => token(a), px);
         const message =
           `Showing ${count(previews.length, "preview")}.` +
           (missing.length ? ` ${count(missing.length, "item")} had no preview or couldn't be found.` : "");
@@ -670,7 +679,9 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
         "linked account: an album per group in its Google Photos (to=photos), a folder per group in its Google Drive (to=drive, inside one " +
         "parent folder), or both. Each photo is copied once and filed into every group it's in, so a photo in several groups uses its storage " +
         "once. Also makes an album (or the parent folder) called title holding every sorted photo. Groups are item numbers from show_photos; " +
-        "Offload doesn't recognise faces itself. Confirm the groups and the account with the person first. Big jobs run in steps: while done " +
+        "Offload doesn't recognise faces itself. When sorting by person, each group is one person across every day in the pick (matched by face, " +
+        "not clothes). Confirm the groups and the account with the person first. The result lists copies (item → media item id), which " +
+        "add_to_photos_album can file into more albums later without copying again. Big jobs run in steps: while done " +
         "is false, call again with only continue_token.",
       inputSchema: {
         photos_session: z.string().optional().describe("From pick_google_photos. Not needed with continue_token."),

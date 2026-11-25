@@ -22,6 +22,9 @@ const MEDIA_FIELDS =
 const SAMPLES = 4;
 const MAX_CAMERAS = 40;
 const PREVIEW_PX = 400;
+/** Bigger previews for telling people apart across photos (faces, not outfits). */
+export const LARGE_PREVIEW_PX = 1024;
+export const MAX_LARGE_PREVIEWS = 4;
 export const MAX_PREVIEWS = 12;
 
 /* ===================================================================== *
@@ -341,12 +344,13 @@ export async function pickedPreviews(
   acct: Account,
   items: Picked[],
   token: (a: Account, scope: string) => Promise<string>,
-  nums: number[] = []
+  nums: number[] = [],
+  px: number = PREVIEW_PX
 ): Promise<Preview[]> {
   const t = await token(acct, PICKER_SCOPE);
   const out = await Promise.all(
     items.map(async (it, i): Promise<Preview | null> => {
-      const img = await fetchImage(`${it.url}=w${PREVIEW_PX}-h${PREVIEW_PX}`, t);
+      const img = await fetchImage(`${it.url}=w${px}-h${px}`, t);
       return img ? { ...(nums[i] ? { item: nums[i] } : {}), name: it.name, taken: it.time, account: acct.e, video: it.video, ...img } : null;
     })
   );
@@ -356,7 +360,7 @@ export async function pickedPreviews(
 const ID_RE = /^[A-Za-z0-9_-]{5,}$/;
 
 /** Small previews of Drive photos and videos by file ID. Each ID is looked up in `accounts` until one can see it. */
-export async function drivePreviews(accounts: Account[], ids: string[], token: (a: Account) => Promise<string>) {
+export async function drivePreviews(accounts: Account[], ids: string[], token: (a: Account) => Promise<string>, px: number = PREVIEW_PX) {
   const missing: string[] = [];
   const out = await Promise.all(
     ids.map(async (id) => {
@@ -371,7 +375,7 @@ export async function drivePreviews(accounts: Account[], ids: string[], token: (
             supportsAllDrives: true,
           });
           if (!f.thumbnailLink) break;
-          const url = String(f.thumbnailLink).replace(/=s\d+$/, `=s${PREVIEW_PX}`);
+          const url = String(f.thumbnailLink).replace(/=s\d+$/, `=s${px}`);
           const img = await fetchImage(url, await token(acct));
           if (!img) break;
           const taken = monthKey(f.imageMediaMetadata?.time) ? String(f.imageMediaMetadata.time).replace(/^(\d{4}):(\d{2}):(\d{2})/, "$1-$2-$3") : f.createdTime;
