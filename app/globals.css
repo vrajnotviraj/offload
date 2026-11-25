@@ -142,6 +142,7 @@ h3 { font-family:var(--display); font-weight:800; font-size:20px; margin:0 0 6px
 .copyurl { display:flex; align-items:center; gap:8px; margin-top:10px; background:var(--surface); border:1px solid var(--hair); border-radius:12px; padding:6px 6px 6px 14px; max-width:460px; }
 .copyurl code { flex:1; min-width:0; font:14px/1.4 var(--mono); color:var(--ink); overflow-x:auto; white-space:nowrap; scrollbar-width:none; }
 .copyurl .btn { flex:none; padding:8px 14px; font-size:14px; min-width:76px; }
+.trust + .clink { margin-top:24px; }
 .clink { display:inline-block; margin-top:8px; font-size:14px; font-weight:600; color:var(--sun-ink); text-decoration:underline; text-underline-offset:3px; }
 .connect-guide { grid-column:1 / -1; scroll-margin-top:24px; min-width:0; }
 .connect-guide h3 { font-family:var(--display); font-size:clamp(22px, 2.6vw, 28px); line-height:1.2; margin:0 0 10px; color:var(--ink); }

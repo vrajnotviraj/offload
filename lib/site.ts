@@ -25,7 +25,7 @@ export const SITE_URL = (() => {
  * When each page's content last changed (YYYY-MM-DD). Used for the sitemap's lastmod and the "Last updated" lines,
  * so search engines see a date that only moves when the page really changes. Update it when you edit the page.
  */
-export const PAGE_UPDATED = { home: "2026-11-17", privacy: "2026-11-17", terms: "2026-11-13" } as const;
+export const PAGE_UPDATED = { home: "2026-11-25", privacy: "2026-11-17", terms: "2026-11-13" } as const;
 
 /** The Offload web app, on this site. Every "Open Offload" button links here. */
 export const APP_URL = "/app";
@@ -63,6 +63,22 @@ export const FAQS: { q: string; a: string }[] = [
   {
     q: "Can I move my Google Photos to another account?",
     a: "Yes, as a copy. Google Photos has no way to hand photos to another account, so Offload copies the ones you pick, up to 2,000 at a time, into your other account's Google Photos and gathers them in an album. Your originals stay where they are: delete them once you've checked the copies, and that frees the space. Some very large videos may not copy.",
+  },
+  {
+    q: "Can Offload delete my Google Photos?",
+    a: "No. Google doesn't let apps delete anything from Google Photos, so Offload only ever adds copies. After copying, check the copies in your other account, then delete the originals yourself in Google Photos and empty its trash. That's what frees the space.",
+  },
+  {
+    q: "Can it sort my photos by person?",
+    a: "Yes, from ChatGPT or Claude. Pick the photos in Google Photos, and the AI looks at small previews and suggests who's in which, which you check and agree. Offload then makes an album or a Drive folder for each person. A photo with several people in it goes into each of their folders but is stored only once. Offload itself doesn't recognise faces or keep any face data.",
+  },
+  {
+    q: "Can I share a folder with a friend?",
+    a: "Yes, from ChatGPT or Claude. Ask it to share a Drive folder with someone by name: Offload looks them up in your Google Contacts (if you allowed it), shows you the matches, and shares the folder only once you confirm. They get view or comment access, never edit, and Google emails them the link. You can stop sharing any time with Share on the folder in Drive. Google Photos albums can't be shared this way, only Drive folders.",
+  },
+  {
+    q: "Does Offload read my contacts?",
+    a: "Only if you tick the optional Contacts boxes when you connect, and only when you ask it to share with someone by name. It's read-only, it gets back just names and email addresses, and it keeps nothing. Without it, you can type the email address instead.",
   },
   {
     q: "Can it clean up Gmail too?",
