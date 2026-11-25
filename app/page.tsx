@@ -1,6 +1,7 @@
 import { Header, Footer } from "@/components/Chrome";
 import { HeroDemo } from "@/components/HeroDemo";
 import { GmailDemo } from "@/components/GmailDemo";
+import { SortShareDemo } from "@/components/SortShareDemo";
 import { CopyUrl } from "@/components/CopyUrl";
 import { ClaudeMark, OpenAIMark, WorksWith } from "@/components/BrandMarks";
 import { HeroBackdrop, HeroFloaters, StepArt, PrivacyArt, BandArt } from "@/components/Illustrations";
@@ -118,6 +119,29 @@ const FEATURES = [
     title: "Your photos, month by month",
     body: "Ask your AI how many photos you took each year, which month was busiest, or to show you last July. Previews appear right in the chat.",
     icon: "M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6ZM4 10h16M8 2v4M16 2v4",
+  },
+];
+
+const SORT_POINTS = [
+  {
+    title: "You say who’s who",
+    body: "Offload doesn’t recognise faces or keep face data. Your AI suggests the groups from previews, and you agree them.",
+    icon: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM5 21a7 7 0 0 1 14 0",
+  },
+  {
+    title: "Stored once",
+    body: "A photo with three friends in it is in all three folders, but only takes up the space of one.",
+    icon: "M8 8h11v11H8zM5 16V5h11",
+  },
+  {
+    title: "Only who you confirm",
+    body: "Contacts are read-only and searched only when you ask. Nothing is shared until you say yes, view-only by default.",
+    icon: "M5 12.5l4.5 4.5L19 7.5",
+  },
+  {
+    title: "Deleting is yours",
+    body: "Offload can’t delete from Google Photos. Check the copies, then delete the originals there yourself.",
+    icon: "M4 7h16M10 11v6M14 11v6M9 7V4h6v3M6 7l1 13h10l1-13",
   },
 ];
 
@@ -411,7 +435,7 @@ export default function Home() {
             </section>
           </section>
 
-          <section id="sort-share" className="block gmail-block" aria-labelledby="sort-share-title">
+          <section id="sort-share" className="block sort-block" aria-labelledby="sort-share-title">
             <div>
               <p className="kicker">New in ChatGPT and Claude</p>
               <h2 id="sort-share-title">
@@ -419,60 +443,29 @@ export default function Home() {
               </h2>
               <p className="lede">
                 Back from a trip or a wedding with hundreds of photos? Pick them in Google Photos, tell your AI who&rsquo;s who,
-                and Offload files them into an album or a Drive folder for each person. Then it looks up your friends in your
-                Google Contacts and shares each folder with the right one.
+                and Offload files them into a folder for each person. Then it finds your friends in your Google Contacts and
+                sends each one their own folder.
               </p>
-              <ul className="trust">
-                <li>
-                  <h3>You say who&rsquo;s who</h3>
-                  <p>Offload doesn&rsquo;t recognise faces or keep any face data. Your AI suggests the groups from previews, and you agree them.</p>
-                </li>
-                <li>
-                  <h3>One copy, many folders</h3>
-                  <p>A photo with three friends in it goes in all three folders but is stored once, so sorting costs no extra space.</p>
-                </li>
-                <li>
-                  <h3>Only the people you confirm</h3>
-                  <p>Contacts are read-only: names and emails, searched only when you ask. Nothing is shared until you say yes, and it&rsquo;s view-only unless you choose comments.</p>
-                </li>
-                <li>
-                  <h3>Deleting is yours</h3>
-                  <p>Offload can&rsquo;t delete anything from Google Photos. Once you&rsquo;ve checked the copies, delete the originals there yourself.</p>
-                </li>
+              <ul className="sd-points">
+                {SORT_POINTS.map((p, i) => (
+                  <li key={p.title} data-reveal style={{ "--d": i } as React.CSSProperties}>
+                    <h3>
+                      <span aria-hidden="true">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                          <path d={p.icon} />
+                        </svg>
+                      </span>
+                      {p.title}
+                    </h3>
+                    <p>{p.body}</p>
+                  </li>
+                ))}
               </ul>
-              <a className="clink" href="/blog/send-friends-their-trip-photos-google-drive">How it works, step by step &rarr;</a>
+              <a className="clink" href="/blog/send-friends-their-trip-photos-google-drive">
+                How it works, step by step &rarr;
+              </a>
             </div>
-            <div className="chat" aria-label="Example conversation: sorting trip photos and sharing them">
-              <p className="msg you" data-reveal style={{ "--d": 0 } as React.CSSProperties}>
-                Sort my Goa trip photos by person: me, Riya and Kabir.
-              </p>
-              <div className="msg claude" data-reveal style={{ "--d": 1 } as React.CSSProperties}>
-                <span className="tool">Offload &middot; show_photos, sort_photos</span>
-                <p>
-                  Sorted <b>412 photos</b> into folders for <b>Me</b> (230), <b>Riya</b> (168) and <b>Kabir</b> (141) in
-                  &ldquo;Goa 2026&rdquo; in your archive&rsquo;s Drive. Photos with more than one of you are in each of their
-                  folders, stored once.
-                </p>
-              </div>
-              <p className="msg you" data-reveal style={{ "--d": 2 } as React.CSSProperties}>
-                Share Riya&rsquo;s and Kabir&rsquo;s folders with them.
-              </p>
-              <div className="msg claude" data-reveal style={{ "--d": 3 } as React.CSSProperties}>
-                <span className="tool">Offload &middot; find_contacts</span>
-                <p>
-                  Found them in your contacts: <b>Riya Mehta</b> (riya.m@gmail.com) and <b>Kabir Shah</b> (kabir.s@gmail.com).
-                  Share view-only, and let Google email them the link?
-                </p>
-              </div>
-              <p className="msg you" data-reveal style={{ "--d": 4 } as React.CSSProperties}>Yes.</p>
-              <div className="msg claude" data-reveal style={{ "--d": 5 } as React.CSSProperties}>
-                <span className="tool">Offload &middot; share_drive_folder</span>
-                <p>
-                  Done. Riya and Kabir can each view their folder, and Google emailed them a link. The originals are still in
-                  your Google Photos: delete them there once you&rsquo;ve checked the copies.
-                </p>
-              </div>
-            </div>
+            <SortShareDemo />
           </section>
 
           <section className="block privacy-block" aria-labelledby="privacy-title">
