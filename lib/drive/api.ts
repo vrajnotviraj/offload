@@ -13,19 +13,26 @@ export const GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
 export const PICKER_SCOPE = "https://www.googleapis.com/auth/photospicker.mediaitems.readonly";
 /** Add photos to Google Photos, and nothing else (receiving account). */
 export const LIBRARY_SCOPE = "https://www.googleapis.com/auth/photoslibrary.appendonly";
+/** Read the person's saved contacts (names and emails only are asked for), to find who to share a folder with. */
+export const CONTACTS_SCOPE = "https://www.googleapis.com/auth/contacts.readonly";
+/** Read "Other contacts": people they've emailed but never saved. Same use. */
+export const OTHER_CONTACTS_SCOPE = "https://www.googleapis.com/auth/contacts.other.readonly";
 
 const SCOPE_NAMES: Record<string, string> = {
   [DRIVE_SCOPE]: "Google Drive",
   [GMAIL_SCOPE]: "Gmail",
   [PICKER_SCOPE]: "the Google Photos picker",
   [LIBRARY_SCOPE]: "Google Photos",
+  [CONTACTS_SCOPE]: "Google Contacts",
+  [OTHER_CONTACTS_SCOPE]: "Google's other contacts",
 };
 export const scopeName = (s: string) => SCOPE_NAMES[s] || s;
 
 /**
  * A linked Google account: its email, plus a server-side refresh token (empty in the browser).
- * `ph` (connector only) lists the Google Photos permissions the account granted when it was linked:
- * "p" = the picker (PICKER_SCOPE), "a" = add to Google Photos (LIBRARY_SCOPE). Missing on older connections.
+ * `ph` (connector only) lists the optional permissions the account granted when it was linked:
+ * "p" = the picker (PICKER_SCOPE), "a" = add to Google Photos (LIBRARY_SCOPE), "c" = contacts (CONTACTS_SCOPE),
+ * "o" = other contacts (OTHER_CONTACTS_SCOPE). Missing on older connections.
  */
 export type Account = { e: string; r: string; ph?: string };
 

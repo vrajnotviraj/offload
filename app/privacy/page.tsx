@@ -97,7 +97,17 @@ export default function Privacy() {
             account to the other: the sending account requests the transfer and the receiving account accepts it straight away,
             filing loose items into a folder named after the sender. It labels each item it moves with the account it came from
             and the date, a private note on the file that only Offload can see, so the assistant can later tell you what moved where.
-            It doesn&rsquo;t send emails and doesn&rsquo;t delete anything.
+            It doesn&rsquo;t delete anything, and it sends nothing on its own: the only emails are Google&rsquo;s own sharing
+            notices, when you ask it to share a folder.
+          </p>
+          <p>
+            It can also ask for two optional, read-only Google Contacts permissions: your saved contacts, and &ldquo;Other
+            contacts&rdquo; (people you&rsquo;ve emailed but never saved). They&rsquo;re used for one thing: when you ask the
+            assistant to share a Drive folder with someone by name, Offload searches your contacts for that name and gets back only
+            names and email addresses, so you can pick the right person. It searches only when you ask, never creates or changes
+            contacts, and keeps nothing; the matches go to the AI app so you can choose. It then shares the folder only with the
+            people you confirm, and gives them the same access to the files that folder&rsquo;s shortcuts point to, so the shortcuts
+            open. Without these permissions you can type an email address instead.
           </p>
           <p>
             It can also ask for two optional Google Photos permissions, the same ones as the web app: Google&rsquo;s picker, which

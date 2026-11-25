@@ -28,11 +28,15 @@ import {
 } from "@/lib/photos/connector";
 import { CANT_DELETE_PHOTOS, googlePhotosUrl } from "@/lib/photos/engine";
 import { MAX_GROUPS, runSort, sortResult, startSort, type SortState } from "@/lib/photos/sort";
+import { findContacts } from "@/lib/share/contacts";
+import { MAX_SHARE_EMAILS, runShare, shareResult, startShare, type ShareState } from "@/lib/share/drive";
 
 /** How long one transfer_files call works before handing back a continue_token. */
 const TRANSFER_BUDGET_MS = 40_000;
 /** How long one photo_timeline or copy_google_photos call works before handing back a continue_token. */
 const PHOTOS_BUDGET_MS = 35_000;
+/** How long one share_drive_folder call spends sharing the files a folder's shortcuts point to. */
+const SHARE_BUDGET_MS = 35_000;
 
 const INSTRUCTIONS = `Every result starts with "message": a plain summary you can pass on to the person as it is, adding detail from the rest of the result where it helps.
 
@@ -55,6 +59,8 @@ Moving: get_accounts → find_files / folder_size to pick what to move → confi
 Only files the sending account owns can be moved; files owned by anyone else are skipped. Moved items keep their folder structure; loose ones land in "Transferred from <sender>" in the receiving account's My Drive. A transfer can be undone by moving the items back. Nothing is deleted.
 
 Folders: create_drive_folder makes an empty folder in any linked account's Drive (in My Drive, or inside parent_id) and returns its folder_id. add_to_drive_folder files things into a folder in the same account: how=move moves them there; how=shortcut leaves them where they are and adds a shortcut (no extra storage), which is how one file goes into several folders, since Drive keeps each file in one folder.
+
+Sharing: share_drive_folder shares a Drive folder with people by email (view or comment, never edit) and/or by "anyone with the link". To share a sorted person's folder: ask the person who that group is (never guess who someone is from their face, and never look anyone up the person didn't name) → find_contacts with the name they gave → show the matches and let them pick (or type an email) → confirm the folder, every email address, the access, and that Google will email them → share_drive_folder. If find_contacts says contacts aren't allowed, ask for the email address instead. Google Photos albums can't be shared by Offload: the person shares them in Google Photos (Share on the album). Sharing is undone with Share on the folder in Drive.
 
 Photos come in two kinds, and Google treats them differently:
 - Photos and videos stored in Google Drive: photo_timeline counts all of them, month by month and year by year (count, size, video length, cameras, busiest month and year), and gives preview_ids for each month. If it returns done: false, call it again with only continue_token. Show the years as a small table, then the months the person asks about.
@@ -96,9 +102,9 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
     {
       name: "offload",
       title: "Offload",
-      version: "1.5.0",
+      version: "1.6.0",
       description:
-        "Move Google Drive files between your Google accounts, see how much space each one has, browse your photos month by month and year by year, copy Google Photos to another account's Google Photos or Drive, and sort them into new albums and folders.",
+        "Move Google Drive files between your Google accounts, see how much space each one has, browse your photos month by month and year by year, copy Google Photos to another account's Google Photos or Drive, sort them into new albums and folders, and share folders with people from your contacts.",
       ...(site
         ? {
             websiteUrl: site,
@@ -731,6 +737,80 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
         const done = await runSort(accounts, st, PHOTOS_BUDGET_MS, token);
         const res = sortResult(st, accounts, done);
         return photosText(done ? res : { ...res, continue_token: packCursor(st) }, accounts[st.a].e);
+      } catch (e) {
+        return failure(e);
+      }
+    }
+  );
+
+  /* ------------------------------ Sharing ------------------------------ */
+
+  server.registerTool(
+    "find_contacts",
+    {
+      title: "Look someone up in Google Contacts",
+      description:
+        "Finds the email address of someone the person wants to share with, by name (or part of an email), in the saved contacts and " +
+        "\"Other contacts\" (people they've emailed) of every linked account that allowed it. Read-only: only names and email addresses. " +
+        "Show the matches and let the person pick the right one before sharing; never pick for them when there's more than one, and " +
+        "never look someone up from a face: only names the person said.",
+      inputSchema: {
+        query: z.string().min(1).max(100).describe("A name the person gave, e.g. \"Riya\", or part of an email address."),
+        account: emailArg("Only search this account's contacts. Leave out to search every linked account that allowed it."),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async (args) => {
+      try {
+        return text(await findContacts(args.account ? [find(args.account)] : accounts, args.query));
+      } catch (e) {
+        return failure(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "share_drive_folder",
+    {
+      title: "Share a Drive folder",
+      description:
+        "Shares a folder in a linked account's Drive (for example one sort_photos made for a person) with people by email (from " +
+        "find_contacts or typed by the person), and/or turns on 'anyone with the link'. access=view (default) or comment; never edit. " +
+        "With notify (default), Google emails each person a link, with an optional message. Files the folder's shortcuts point to are shared " +
+        "too (quietly), so the shortcuts open. Always confirm first, naming the folder, every email address, the access and whether Google " +
+        "will email them. Google Photos albums can't be shared this way: the person shares those in Google Photos. Big folders run in steps: " +
+        "while done is false, call again with only continue_token.",
+      inputSchema: {
+        folder_id: z.string().optional().describe("The folder to share (from sort_photos, create_drive_folder or find_files). Not needed with continue_token."),
+        account: emailArg(`Account whose Drive the folder is in (sort_photos's to). Defaults to ${main.e}.`),
+        emails: z.array(z.string()).max(MAX_SHARE_EMAILS).optional().describe("Who to share with: email addresses the person confirmed."),
+        anyone_with_link: z.boolean().default(false).describe("Also let anyone with the link open it (not searchable). Returns the link."),
+        access: z.enum(["view", "comment"]).default("view"),
+        notify: z.boolean().default(true).describe("Have Google email each person a link. Needed for addresses without a Google account."),
+        message: z.string().max(1000).optional().describe("A short note for Google's email, in the person's own words."),
+        continue_token: z.string().optional().describe("From a previous call that returned done: false."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async (args) => {
+      try {
+        let st: ShareState;
+        if (args.continue_token) st = unpackCursor<ShareState>(args.continue_token, "dshare");
+        else {
+          if (!args.folder_id) throw new Error("Pass folder_id: the Drive folder to share.");
+          const a = args.account ? indexOf(args.account) : 0;
+          st = await startShare(accounts, a, {
+            folderId: args.folder_id.trim(),
+            emails: args.emails || [],
+            anyone: args.anyone_with_link,
+            access: args.access,
+            notify: args.notify,
+            note: args.message,
+          });
+        }
+        const done = await runShare(accounts, st, SHARE_BUDGET_MS);
+        const res = shareResult(st, accounts, done);
+        return text(done ? res : { ...res, continue_token: packCursor(st) });
       } catch (e) {
         return failure(e);
       }

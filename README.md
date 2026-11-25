@@ -69,6 +69,8 @@ Tools:
 | `sort_photos` | Sorts picked Google Photos into groups in one job: `groups` is a list of names and item numbers (the AI works these out from `show_photos` and agrees them with the person; Offload does no face recognition and keeps no face data). Makes an album per group (`to=photos`), a folder per group inside one parent folder (`to=drive`), or both, in the receiving account; copies each photo once, then files it into every group it's in: the same copy in more albums (`albums.batchAddMediaItems`), or in Drive the file in its first group's folder and shortcuts in the others. Also makes an album (or the parent folder) named `title` with every sorted photo. Runs in steps with a `continue_token`, filing each step's copies before the next (`lib/photos/sort.ts`). |
 | `add_to_drive_folder` | Puts Drive files into a folder in the same account: `how=move` moves them there, `how=shortcut` adds a shortcut and leaves them where they are (no storage; Drive keeps each file in one folder, so this is how one photo goes into several folders). |
 | `create_drive_folder` | Makes an empty folder in a linked account's Drive (`name`, `account`, optional `parent_id`; My Drive by default) and returns its ID and link; `add_to_drive_folder` files things into it. |
+| `find_contacts` | Looks up a name (or part of an email) in the saved contacts and "Other contacts" of every linked account that allowed it (People API `people:searchContacts` and `otherContacts:search`, read-only, `readMask=names,emailAddresses`), and returns names and emails for the person to pick from (`lib/share/contacts.ts`). Nothing is stored. |
+| `share_drive_folder` | Shares a Drive folder with confirmed `emails` (view or comment, never edit; Google emails them a link unless `notify=false`, with an optional `message`) and/or `anyone_with_link`. Also shares, quietly, the files the folder's shortcuts point to outside it, so a photo filed in several people's folders opens for each of them; that part runs in `continue_token` steps (`lib/share/drive.ts`). Google Photos albums can't be shared through the API. |
 | `transfer_files` | Moves files and folders (with their contents) from one linked account to another (`from_account`, `to_account`; with two accounts the receiver defaults to the other one). Big jobs run in steps of about 40 seconds and hand back a `continue_token`; Claude keeps calling until `done` is true. Safe to repeat, and reversible by transferring back. |
 
 Google's add-only Photos access has limits Offload can't get round: it can't list or read the person's albums, add to albums they made in Google Photos, put photos that were already in an account into an album, or delete anything. Offload only ever adds its own copies to its own albums.
@@ -83,7 +85,7 @@ There's no database. The connector is its own OAuth server for Claude (discovery
 
 ### Setup
 
-1. **Google Cloud.** Use the standard Google Cloud project from the Google Photos setup (or any standard project). Enable the **Google Drive API** there. On the consent screen, make sure the `openid`, `email` and `https://www.googleapis.com/auth/drive` scopes are listed (plus `photospicker.mediaitems.readonly` and `photoslibrary.appendonly`, with the **Photos Picker API** and **Photos Library API** enabled, for the photo tools), and while it's in testing, add each Google account that will connect as a test user.
+1. **Google Cloud.** Use the standard Google Cloud project from the Google Photos setup (or any standard project). Enable the **Google Drive API** there. On the consent screen, make sure the `openid`, `email` and `https://www.googleapis.com/auth/drive` scopes are listed (plus `photospicker.mediaitems.readonly` and `photoslibrary.appendonly`, with the **Photos Picker API** and **Photos Library API** enabled, for the photo tools; and `contacts.readonly` and `contacts.other.readonly`, with the **People API** enabled, for `find_contacts`), and while it's in testing, add each Google account that will connect as a test user.
 2. **OAuth client.** Under **Clients**, create a **Web application** client (or add to an existing one) with this authorised redirect URI:
 
    ```
@@ -114,7 +116,7 @@ To try it locally: `npm run build && npm start` with the three variables set, ad
 - Only files you own can be transferred.
 - Google Photos items are copied, not moved: space frees up only once the originals are deleted. A file Google won't send in pieces can't be copied if it's over 100 MB.
 - Sign-ins last about an hour; a longer job pauses once and asks for a click on Continue.
-- Drive, Gmail and Google Photos access are sensitive or restricted Google permissions: past 100 users, the app needs Google's verification (for Drive and Gmail, including a security assessment).
+- Drive, Gmail, Google Photos and Contacts access are sensitive or restricted Google permissions: past 100 users, the app needs Google's verification (for Drive and Gmail, including a security assessment; the read-only Contacts scopes are sensitive, not restricted).
 
 Offload isn't affiliated with Google. Google Drive and Gmail are trademarks of Google LLC.
 

@@ -32,6 +32,8 @@ export function GET(req: Request) {
       `<p>${app} will be able to move Google Drive files between your Google accounts, by handing over ownership.</p>` +
       "<p>Google will also ask about <strong>Google Photos</strong>: leave those boxes ticked to see your photos by month and year, " +
       "preview them in the chat, and copy the ones you pick to another account. Offload only sees photos you pick.</p>" +
+      "<p>It may also ask about <strong>Contacts</strong> (read-only): tick them if you'd like to share a folder by saying who it's for " +
+      "(&ldquo;share this with Riya&rdquo;). Offload looks up only names and email addresses, only when you ask to share.</p>" +
       "<p>First, choose the account you want to <strong>free up</strong>: your main account. Next you'll add the accounts that " +
       `<strong>receive</strong> files, from one up to ${MAX_ACCOUNTS - 1} more.</p>` +
       '<p class="fine">Google may say the app isn\'t verified. Choose Advanced, then Go to Offload. Nothing is stored on Offload\'s servers: ' +
