@@ -117,3 +117,7 @@ To try it locally: `npm run build && npm start` with the three variables set, ad
 - Drive, Gmail and Google Photos access are sensitive or restricted Google permissions: past 100 users, the app needs Google's verification (for Drive and Gmail, including a security assessment).
 
 Offload isn't affiliated with Google. Google Drive and Gmail are trademarks of Google LLC.
+
+### Starter prompts
+
+The connector also offers five prompts, which AI apps list as slash commands or in a + menu: `free_up_space`, `find_a_file`, `photo_timeline`, `copy_google_photos` and `sort_photos`. When someone opens Offload without a task, the server instructions have the AI show their storage and offer these as a numbered list, leading with the one their storage points to.

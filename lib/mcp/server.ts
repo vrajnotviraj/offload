@@ -33,6 +33,14 @@ const PHOTOS_BUDGET_MS = 35_000;
 
 const INSTRUCTIONS = `Every result starts with "message": a plain summary you can pass on to the person as it is, adding detail from the rest of the result where it helps.
 
+Getting started: when the person first brings Offload into a conversation without a clear task ("open Offload", "what can Offload do?"), call get_accounts, show their storage, and then offer these popular options as a short numbered list, so they can just pick one:
+1. Free up space: find the biggest files in the fullest account and move them to the account with the most room.
+2. Find a file: "where is my X?" across every linked account.
+3. Photo timeline: how many photos and videos are in Drive, year by year and month by month.
+4. Copy Google Photos to another account: pick photos and copy them over in original quality.
+5. Sort photos into albums or folders: pick photos, group them (by person, trip, place) and file each group into its own album or Drive folder.
+Leave out options that don't fit (with one account, nothing can move between accounts), and lead with the one their storage points to (an account almost full → free up space). When they already asked for something specific, do that instead of listing options.
+
 Offload moves Google Drive files between the person's own Google accounts (2 to 5 of them, linked when the connector was added) by transferring ownership, which frees storage in the account they leave. The first linked account is their main account.
 
 Storage: get_accounts returns every account's storage. Show it as a small table (account, used, total, free, % used, status) followed by one line on which account has the most room. Google can take a few hours to update these numbers after a move.
@@ -690,6 +698,45 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
         return failure(e);
       }
     }
+  );
+
+  /* ------------------------- Starter prompts ------------------------- */
+  // Shown by AI apps that list a connector's prompts (often as slash commands or in a + menu): the popular things to do.
+
+  const starter = (name: string, title: string, description: string, ask: string) =>
+    server.registerPrompt(name, { title, description }, () => ({
+      messages: [{ role: "user" as const, content: { type: "text" as const, text: ask } }],
+    }));
+
+  starter(
+    "free_up_space",
+    "Free up space",
+    "Find the biggest files in your fullest Google account and move them to the one with the most room.",
+    "Use Offload to show the storage of my linked Google accounts, then find the biggest files in the fullest one and suggest what to move to the account with the most room. Ask me before moving anything."
+  );
+  starter(
+    "find_a_file",
+    "Find a file",
+    "Search every linked Google account at once and say which one a file is in.",
+    "Use Offload to help me find a file across all my linked Google accounts. Ask me what I'm looking for."
+  );
+  starter(
+    "photo_timeline",
+    "Photo timeline",
+    "See how many photos and videos are in your Drive, year by year and month by month.",
+    "Use Offload to show a timeline of the photos and videos in my Google Drive, year by year, and tell me my busiest year and month."
+  );
+  starter(
+    "copy_google_photos",
+    "Copy Google Photos to another account",
+    "Pick photos in Google Photos and copy them to another of your accounts in original quality.",
+    "Use Offload to copy photos from my Google Photos to my other Google account. Start the picker and tell me what to do."
+  );
+  starter(
+    "sort_photos",
+    "Sort photos into albums or folders",
+    "Pick photos, group them by person, trip or place, and file each group into its own album or Drive folder.",
+    "Use Offload to sort photos from my Google Photos into albums (or Drive folders) by group, for example one per person. Start the picker, then show me the groups you see before making anything."
   );
 
   return server;
