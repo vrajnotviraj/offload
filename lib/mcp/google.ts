@@ -1,5 +1,5 @@
 /** Google sign-in for the AI connector (server side): OAuth code exchange and refresh-token access. */
-import { CONTACTS_SCOPE, LIBRARY_SCOPE, OTHER_CONTACTS_SCOPE, PICKER_SCOPE, setTokenSource, type Account } from "@/lib/drive/api";
+import { APPDATA_SCOPE, CONTACTS_SCOPE, LIBRARY_SCOPE, OTHER_CONTACTS_SCOPE, PICKER_SCOPE, setTokenSource, type Account } from "@/lib/drive/api";
 
 export type { Account };
 
@@ -7,6 +7,8 @@ export const GOOGLE_SCOPES = [
   "openid",
   "email",
   "https://www.googleapis.com/auth/drive",
+  // Offload's own hidden note in Drive's application data folder: the storage size it remembers to spot new events in Google Photos.
+  APPDATA_SCOPE,
   // Google Photos: see only the photos the person picks in Google's picker, and add copies to Google Photos.
   // Optional: an account that leaves these unticked still works for Drive.
   PICKER_SCOPE,

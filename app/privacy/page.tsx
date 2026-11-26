@@ -47,8 +47,12 @@ export default function Privacy() {
 
           <h2>What it stores</h2>
           <p>
-            Offload has no database. Your files, their names and your storage figures aren&rsquo;t kept anywhere, and the developer
-            can&rsquo;t see your files, your photos, your mail or your accounts.
+            Offload has no database. Your files and their names aren&rsquo;t kept anywhere, and the developer can&rsquo;t see your
+            files, your photos, your mail or your accounts. The one exception is in your own Drive: if you ask the AI connector to
+            watch for new events in Google Photos, it keeps a small private note in each account&rsquo;s Drive application data
+            folder (hidden from Drive&rsquo;s file list, uses no storage, and only Offload can read it) holding that account&rsquo;s
+            Google Photos and Gmail storage size, the dates it was checked, and the size and dates of the last new event. No
+            photos, names or file lists. Asking the assistant to stop watching deletes the note.
           </p>
           <p>
             In your browser, Offload keeps its Google sign-ins in this browser&rsquo;s storage, so reloading, opening a new tab or
@@ -123,7 +127,9 @@ export default function Privacy() {
             small photo previews you ask for; that app&rsquo;s own privacy policy (Anthropic&rsquo;s for Claude, OpenAI&rsquo;s for
             ChatGPT) covers what it does with your conversation. When you copy Google Photos from the AI app, each photo passes
             through this website in pieces on its way to your other account, as in the web app, without being stored or looked at.
-            Other file contents are never read.
+            Other file contents are never read. Watching for new events runs only when the AI app asks (for example from a daily
+            scheduled task you set up there): it reads each account&rsquo;s storage size, compares it with the note above, and never
+            picks, copies or shares photos unless you say yes in the chat.
           </p>
 
           <h2>Removing access</h2>

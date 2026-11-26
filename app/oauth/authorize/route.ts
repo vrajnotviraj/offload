@@ -34,6 +34,8 @@ export function GET(req: Request) {
       "preview them in the chat, and copy the ones you pick to another account. Offload only sees photos you pick.</p>" +
       "<p>It may also ask about <strong>Contacts</strong> (read-only): tick them if you'd like to share a folder by saying who it's for " +
       "(&ldquo;share this with Riya&rdquo;). Offload looks up only names and email addresses, only when you ask to share.</p>" +
+      "<p>And about Offload's own <strong>private notes in your Drive</strong>: keep it ticked to have new events in Google Photos spotted " +
+      "(a trip, a party), from their storage size. The note holds only sizes and dates, and is hidden from your Drive.</p>" +
       "<p>First, choose the account you want to <strong>free up</strong>: your main account. Next you'll add the accounts that " +
       `<strong>receive</strong> files, from one up to ${MAX_ACCOUNTS - 1} more.</p>` +
       '<p class="fine">Google may say the app isn\'t verified. Choose Advanced, then Go to Offload. Nothing is stored on Offload\'s servers: ' +

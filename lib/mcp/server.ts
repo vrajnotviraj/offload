@@ -28,6 +28,7 @@ import {
 } from "@/lib/photos/connector";
 import { CANT_DELETE_PHOTOS, googlePhotosUrl } from "@/lib/photos/engine";
 import { MAX_GROUPS, runSort, sortResult, startSort, type SortState } from "@/lib/photos/sort";
+import { checkAccount, DAILY_CHECK_PROMPT, eventSentence, pickHint, resolveEvent, stopWatching } from "@/lib/photos/watch";
 import { findContacts } from "@/lib/share/contacts";
 import { MAX_SHARE_EMAILS, runShare, shareResult, startShare, type ShareState } from "@/lib/share/drive";
 
@@ -46,6 +47,7 @@ Getting started: when the person first brings Offload into a conversation withou
 3. Photo timeline: how many photos and videos are in Drive, year by year and month by month.
 4. Copy Google Photos to another account: pick photos and copy them over in original quality.
 5. Sort photos into albums or folders: pick photos, group them (by person, trip, place) and file each group into its own album or Drive folder.
+6. Watch for new events: a daily check that spots when Google Photos grows by 100 MB or more (a trip, a wedding, a party) and offers to send that event's photos to the people in them.
 Leave out options that don't fit (with one account, nothing can move between accounts), and lead with the one their storage points to (an account almost full → free up space). When they already asked for something specific, do that instead of listing options.
 
 Offload moves Google Drive files between the person's own Google accounts (2 to 5 of them, linked when the connector was added) by transferring ownership, which frees storage in the account they leave. The first linked account is their main account.
@@ -72,6 +74,9 @@ Photos come in two kinds, and Google treats them differently:
 - What Google doesn't allow, so don't offer it: listing or reading the person's albums, adding to albums they made in Google Photos, putting photos that were already in an account into an album, deleting anything from Google Photos. Offload only ever adds its own copies to its own albums; the person adds their existing photos in Google Photos.
 - Sorting photos into groups (one per person, place, trip, anything): pick → show_photos (every page, with offset) → you work out the groups from what you see and list them for the person by item number, with a short description of each group rather than a name you guess → they confirm or correct → sort_photos with the groups. When grouping by person, make one group per person across the whole pick, not per outfit or day: people change clothes between days, so match them by face (show_photos with size=large on the photos you're unsure about, and compare faces, hair, glasses and build), and use clothing only to follow someone within one event. If a match across days is uncertain, say so and ask rather than splitting or merging silently. It makes an album and/or Drive folder per group in the receiving account, copies each photo once, and files it into every group it belongs to (one copy in several albums; in Drive, the file in its first group's folder and shortcuts in the rest). Offload itself doesn't recognise anyone: the groups are what you and the person agreed. Say when a match is a guess (small previews, similar outfits), and never name a person the person hasn't named. For one-off filing, create_photos_album / create_drive_folder, copy_google_photos and add_to_photos_album / add_to_drive_folder still work step by step.
 - If a tool says an account hasn't allowed Google Photos, pass on its message: the person reconnects Offload and leaves the Google Photos boxes ticked.
+- New events (check_new_photos): Offload remembers each account's Google Photos storage (Google counts it together with Gmail) and treats growth of 100 MB or more in about a day as a new event. The first call only starts watching. Offload can't run on a schedule itself, so when the person wants the daily check, set up a daily scheduled task in this app with daily_check.prompt if the app has scheduled tasks; if it doesn't, tell them to ask "any new photos?" now and then. When check_new_photos reports an open event, tell the person how much arrived and when, and ask one question: do they want to send that event's photos to the people in them? Never start picking, copying or sharing before they say yes.
+  - If no: check_new_photos with resolve=skipped, so it isn't raised again.
+  - If yes, plan the whole thing with them, step by step: (1) pick_google_photos for the account the event is in, passing on pick_hint so they choose the event's photos (Offload has no face or text recognition and can't see the library until they pick); (2) show_photos on every page, then propose one group per person across the whole event, by item number with a short description of each person, never a guessed name; (3) ask who each person is; (4) find_contacts for each name they give and let them pick the email (or type it); (5) show the full plan before anything is made: a parent Drive folder for the event, one folder inside it per person named after them, how many photos each gets, which account the copies go to (Drive copies use that account's storage: get_accounts shows which has room), and who each folder is shared with (view access, and Google emails them a link); (6) on their yes, sort_photos with to=drive, the groups named after the people, and title set to the event's name; (7) share_drive_folder for each person's folder with that person's email only; (8) check_new_photos with resolve=sent. Use Drive folders, not albums, because Offload can't share Google Photos albums.
 - Offload can't delete anything from Google Photos, and Google doesn't let any app do it. Every Google Photos result's message ends by saying so, with a link to the account's Google Photos: always pass that part on, after every Google Photos action, so the person knows deleting the originals (to free the space) is something they do themselves in Google Photos. Never offer to delete them or suggest Offload will.`;
 
 function text(data: unknown) {
@@ -102,7 +107,7 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
     {
       name: "offload",
       title: "Offload",
-      version: "1.6.0",
+      version: "1.7.0",
       description:
         "Move Google Drive files between your Google accounts, see how much space each one has, browse your photos month by month and year by year, copy Google Photos to another account's Google Photos or Drive, sort them into new albums and folders, and share folders with people from your contacts.",
       ...(site
@@ -817,6 +822,115 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
     }
   );
 
+  /* ---------------------- Watching for new events ---------------------- */
+
+  server.registerTool(
+    "check_new_photos",
+    {
+      title: "Check for a new event in Google Photos",
+      description:
+        "Remembers each linked account's Google Photos storage (with Gmail: Google reports them together) and says whether it grew by " +
+        "threshold_mb (100 MB by default) or more since about a day ago. A jump that size means a new event: a trip, a wedding, a party. " +
+        "The first call starts watching and only remembers today's figure. Made for a daily scheduled task in the AI app, and for \"any new photos?\". " +
+        "When it reports an open event, ask the person whether to send that event's photos to the people in them, then follow the event plan " +
+        "in the instructions. Pass resolve=sent once the photos are shared, or resolve=skipped if the person says no, so it isn't raised again; stop=true stops watching. " +
+        "Offload can't see the photos themselves until the person picks them: only the size and the dates.",
+      inputSchema: {
+        threshold_mb: z.number().int().min(10).max(100_000).default(100).describe("Growth, in MB, that counts as a new event."),
+        account: emailArg("Only check this account. Leave out to check every linked account."),
+        resolve: z
+          .enum(["sent", "skipped"])
+          .optional()
+          .describe("Close the open event instead of checking: sent = its photos were shared, skipped = the person said no."),
+        stop: z
+          .boolean()
+          .optional()
+          .describe("Stop watching: deletes the note Offload keeps in each account's Drive. Also delete the daily scheduled task if you made one."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async (args) => {
+      try {
+        const targets = args.account ? [find(args.account)] : accounts;
+        if (args.stop) {
+          const gone = await Promise.all(targets.map(stopWatching));
+          const deleted = gone.filter((g) => g.deleted).map((g) => g.email);
+          return text({
+            message: deleted.length
+              ? `Stopped watching ${listing(deleted)}: Offload's note is deleted. Remove the daily scheduled task too, if there is one.`
+              : "Offload wasn't watching any of these accounts.",
+            stopped: deleted,
+          });
+        }
+        if (args.resolve) {
+          const done = await Promise.all(targets.map((a) => resolveEvent(a, args.resolve!)));
+          const closed = done.filter((d) => d.closed);
+          const how = args.resolve === "sent" ? "Marked as sent" : "Okay, I'll leave it";
+          const message = closed.length
+            ? `${how}: ${listing(closed.map((d) => `the ${d.added} event in ${d.email}`))}. The daily check carries on and only speaks up for the next one.`
+            : "There was no open event to close.";
+          return text({ message, closed });
+        }
+
+        const settled = await Promise.allSettled(targets.map((a) => checkAccount(a, args.threshold_mb)));
+        const checks = settled.flatMap((s) => (s.status === "fulfilled" ? [s.value] : []));
+        const problems = settled.flatMap((s, i) =>
+          s.status === "rejected" ? [{ email: targets[i].e, error: s.reason instanceof Error ? s.reason.message : String(s.reason) }] : []
+        );
+        if (!checks.length && problems.length) throw new Error(problems.map((p) => p.error).join(" "));
+
+        const open = checks.filter((c) => c.event?.status === "open");
+        const started = checks.filter((c) => c.started);
+        const parts: string[] = [];
+        if (open.length) {
+          parts.push(...open.map(eventSentence));
+          parts.push(
+            open.length === 1
+              ? "Want to send these photos to the people in them? I'd have you pick them in Google Photos, group them by person, make a Drive folder for each person named after them, and share each folder with them. Nothing happens until you say yes."
+              : "Want to send these photos to the people in them? Say which event to start with: I'd have you pick its photos in Google Photos, group them by person, make a Drive folder for each person named after them, and share each folder with them."
+          );
+        } else if (started.length === checks.length) {
+          parts.push(
+            `Watching started: I'll remember the Google Photos storage of ${listing(started.map((c) => `${c.email} (${c.photos_and_gmail_now})`))} ` +
+              `and flag a new event when it grows by ${args.threshold_mb} MB or more in a day.`
+          );
+        } else {
+          const watched = checks.filter((c) => !c.started);
+          parts.push(
+            `No new event: ${listing(watched.map((c) => `${c.email} grew ${c.grown_since_baseline}`))} since the last baseline ` +
+              `(an event is ${args.threshold_mb} MB or more in about a day).`
+          );
+          if (started.length) parts.push(`Started watching ${listing(started.map((c) => c.email))}.`);
+        }
+        if (problems.length) parts.push(...problems.map((p) => p.error));
+
+        return text({
+          message: parts.join(" "),
+          new_event: open.length > 0,
+          events: open.map((c) => ({
+            account: c.email,
+            added: c.event!.added,
+            from: c.event!.from_date,
+            to: c.event!.to_date,
+            new_since_last_check: c.event!.new_since_last_check,
+            pick_hint: pickHint(c),
+          })),
+          accounts: checks.map(({ event, ...c }) => ({ ...c, last_event: event ? { status: event.status, added: event.added, from: event.from_date, to: event.to_date } : null })),
+          ...(problems.length ? { problems } : {}),
+          daily_check: {
+            note:
+              "Offload can't run on a schedule by itself. For a daily check, set up a daily scheduled task in this AI app with this prompt; " +
+              "without one, the person can ask \"any new photos?\" any time.",
+            prompt: DAILY_CHECK_PROMPT,
+          },
+          note: "Google reports Google Photos and Gmail storage together and can take a few hours to update it. Offload remembers only these sizes and dates, in a private note in each account's Drive.",
+        });
+      } catch (e) {
+        return failure(e);
+      }
+    }
+  );
+
   /* ------------------------- Starter prompts ------------------------- */
   // Shown by AI apps that list a connector's prompts (often as slash commands or in a + menu): the popular things to do.
 
@@ -854,6 +968,13 @@ export function buildServer(accounts: Account[], site?: string): McpServer {
     "Sort photos into albums or folders",
     "Pick photos, group them by person, trip or place, and file each group into its own album or Drive folder.",
     "Use Offload to sort photos from my Google Photos into albums (or Drive folders) by group, for example one per person. Start the picker, then show me the groups you see before making anything."
+  );
+
+  starter(
+    "watch_new_photos",
+    "Watch for new events",
+    "Check every day whether Google Photos grew by 100 MB or more, and offer to send that event's photos to the people in them.",
+    "Use Offload's check_new_photos to start watching my Google Photos for new events. Then set up a daily scheduled task that runs its daily check, if you can; if you can't, tell me how to check myself."
   );
 
   return server;

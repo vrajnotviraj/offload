@@ -13,6 +13,8 @@ export const GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
 export const PICKER_SCOPE = "https://www.googleapis.com/auth/photospicker.mediaitems.readonly";
 /** Add photos to Google Photos, and nothing else (receiving account). */
 export const LIBRARY_SCOPE = "https://www.googleapis.com/auth/photoslibrary.appendonly";
+/** Offload's own hidden notes in Drive's application data folder (the Google Photos storage it remembers to spot new events). */
+export const APPDATA_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
 /** Read the person's saved contacts (names and emails only are asked for), to find who to share a folder with. */
 export const CONTACTS_SCOPE = "https://www.googleapis.com/auth/contacts.readonly";
 /** Read "Other contacts": people they've emailed but never saved. Same use. */
@@ -20,6 +22,7 @@ export const OTHER_CONTACTS_SCOPE = "https://www.googleapis.com/auth/contacts.ot
 
 const SCOPE_NAMES: Record<string, string> = {
   [DRIVE_SCOPE]: "Google Drive",
+  [APPDATA_SCOPE]: "Offload's private notes in Google Drive",
   [GMAIL_SCOPE]: "Gmail",
   [PICKER_SCOPE]: "the Google Photos picker",
   [LIBRARY_SCOPE]: "Google Photos",
