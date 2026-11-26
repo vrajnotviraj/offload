@@ -1,4 +1,5 @@
-import { googleAuthUrl, googleExchange } from "@/lib/mcp/google";
+import { admit, waitlistMessage } from "@/lib/access/sheet";
+import { googleAuthUrl, googleExchange, revokeGoogle } from "@/lib/mcp/google";
 import { backToClient, esc, FLOW_TTL, googleRedirect, origin, page, MAX_ACCOUNTS } from "@/lib/mcp/oauth";
 import type { Flow } from "@/lib/mcp/oauth";
 import { open, seal } from "@/lib/mcp/seal";
@@ -28,6 +29,21 @@ export async function GET(req: Request) {
       body: `<p class="bad">${esc(e instanceof Error ? e.message : String(e))}</p>`,
       button: { href: googleAuthUrl(googleRedirect(req), seal("flow", flow, FLOW_TTL)), label: "Try again" },
     });
+  }
+
+  // Early access: the main account (the first one linked) takes a spot, or joins the waitlist.
+  if (!flow.accts.length) {
+    const a = await admit(acct.e, "AI connector");
+    if (a.status === "waitlist") {
+      await revokeGoogle(acct.r);
+      return page({
+        title: "You're on the waitlist",
+        body:
+          `<p>${esc(waitlistMessage(acct.e, a.position))}</p>` +
+          "<p>Offload didn't keep your sign-in. Once you're let in, connect Offload again in your AI app.</p>",
+        button: { href: `${origin(req)}/`, label: "Back to Offload" },
+      });
+    }
   }
 
   if (flow.accts.some((x) => x.e === acct.e)) {

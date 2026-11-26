@@ -55,6 +55,13 @@ export default function Privacy() {
             photos, names or file lists. Asking the assistant to stop watching deletes the note.
           </p>
           <p>
+            Early access: Offload is open to its first 100 people for now. To count them, it keeps a list in a Google Sheet that
+            only the developer can open: the email address of the first account each person signs in with, when, and whether it
+            was the web app or an AI app. If the spots are taken, that email (and the name you give, if you use the waitlist form)
+            goes on a waitlist in the same sheet instead, and Offload doesn&rsquo;t keep your sign-in. Nothing else about you or
+            your accounts is in it. To be removed from either list, email the developer.
+          </p>
+          <p>
             In your browser, Offload keeps its Google sign-ins in this browser&rsquo;s storage, so reloading, opening a new tab or
             coming back later doesn&rsquo;t sign you out. They&rsquo;re only ever sent to Google. Each one lets Offload act for
             about an hour; after that it asks you to click Continue, and Google renews it. Choosing Sign out removes an account

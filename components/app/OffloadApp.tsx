@@ -21,7 +21,7 @@ import {
   type TransferResult,
 } from "@/lib/drive/engine";
 import { allowGmail, allowScope, hasGmail, hasScope, initBrowserAuth, onReauthNeeded, reauth, signIn, signOut, tokenFor } from "@/lib/drive/browserAuth";
-import { LIBRARY_SCOPE, PICKER_SCOPE, ScopeNeededError } from "@/lib/drive/api";
+import { DRIVE_SCOPE, LIBRARY_SCOPE, PICKER_SCOPE, ScopeNeededError } from "@/lib/drive/api";
 import {
   CANT_DELETE_PHOTOS,
   copyPicked,
@@ -125,6 +125,20 @@ export default function OffloadApp({ clientId }: { clientId: string }) {
     setBusy(true);
     try {
       const a = await signIn();
+      // Early access: the first account someone signs in with takes a spot, or joins the waitlist.
+      if (!accounts.length) {
+        const res = await fetch("/api/access", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: await tokenFor(a, DRIVE_SCOPE) }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (body.status === "waitlist") {
+          signOut(a.e);
+          setNotice(body.message || "Offload is full for now, and you're on the waitlist.");
+          return;
+        }
+      }
       if (accounts.some((x) => x.e === a.e)) {
         setNotice(`${a.e} is already signed in. To add another account, choose a different one in Google's window.`);
       } else {

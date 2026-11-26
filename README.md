@@ -111,6 +111,35 @@ While the consent screen's publishing status is **Testing**, Google lets only te
 
 To try it locally: `npm run build && npm start` with the three variables set, add `http://localhost:3000/oauth/callback` to the OAuth client, and point an MCP client such as the MCP Inspector at `http://localhost:3000/mcp`.
 
+## Early access and the waitlist
+
+Offload is open to its first `ACCESS_LIMIT` people (100 by default); everyone after that joins a waitlist. A person counts once, by the first account they sign in with (the connector's main account, or the web app's first account); their other linked accounts don't take spots. The list is a Google Sheet (`lib/access/sheet.ts`) with two tabs, made automatically on first use:
+
+| Tab | Columns | |
+| --- | --- | --- |
+| `Users` | Email, Joined, Via | Who's in. Delete a row to free a spot. |
+| `Waitlist` | Email, Joined, Via, Name | Who's waiting, in order. To let someone in, move their row to `Users` (or raise `ACCESS_LIMIT`). |
+
+- **Connector:** `/oauth/callback` checks the main account. If it's full, the person sees "You're on the waitlist (#N)", Offload revokes the Google sign-in it just got, and the connection doesn't finish. Connections made before the gate keep working until they reconnect.
+- **Web app:** after the first sign-in, the browser sends that token to `/api/access`, which checks with Google that it was issued to Offload's client and which account it's for, then admits or waitlists it. It isn't stored. Accounts already signed in in a browser aren't re-checked.
+- **Waitlist form:** `/waitlist` (email and optional name, with a honeypot field) posts to `/api/waitlist`.
+- If the sheet can't be reached, people are let in rather than locked out (the error is logged). Without the variables below the gate is off.
+
+Setup:
+
+1. Create a Google Sheet (any name) and copy its ID from the URL (`docs.google.com/spreadsheets/d/<ID>/edit`).
+2. In the Google Cloud project, enable the **Google Sheets API**, create a **service account** (IAM & Admin → Service accounts), and add a JSON key for it.
+3. Share the sheet with the service account's email (`…@….iam.gserviceaccount.com`) as **Editor**.
+4. Vercel environment variables:
+
+   | Variable | Value |
+   | --- | --- |
+   | `WAITLIST_SHEET_ID` | The sheet's ID. |
+   | `GOOGLE_SERVICE_ACCOUNT_KEY` | The whole JSON key file (or it base64-encoded). |
+   | `ACCESS_LIMIT` | Optional. How many people get in; 100 by default. |
+
+5. Redeploy.
+
 ## Limits
 
 - Personal Gmail accounts. Work and school accounts usually block transfers outside their organisation.

@@ -98,6 +98,19 @@ function emailFromIdToken(idToken: unknown): string | null {
   }
 }
 
+/** Tells Google to drop a refresh token Offload won't use (best effort). */
+export async function revokeGoogle(refresh: string) {
+  try {
+    await fetch("https://oauth2.googleapis.com/revoke", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: refresh }),
+    });
+  } catch {
+    // Nothing to do: Google expires unused sign-ins anyway.
+  }
+}
+
 // Short-lived Google access tokens, kept per warm server instance so each tool call doesn't refresh again.
 const accessCache = new Map<string, { token: string; until: number }>();
 
