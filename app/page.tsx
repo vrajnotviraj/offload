@@ -125,7 +125,7 @@ const FEATURES = [
 const SORT_POINTS = [
   {
     title: "You say who’s who",
-    body: "Offload doesn’t recognise faces or keep face data. Your AI suggests the groups from previews, and you agree them.",
+    body: "In chat, your AI suggests the groups from previews. In the web app, you tap who’s in each photo. Either way you name and check every group, and no face data is kept.",
     icon: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM5 21a7 7 0 0 1 14 0",
   },
   {

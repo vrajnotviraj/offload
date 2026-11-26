@@ -1,12 +1,13 @@
 import type { Account } from "@/lib/drive/api";
 import { addToFolder, count, createFolder, folderIn, human, listing } from "@/lib/drive/engine";
-import { addToAlbum, copyPickedServer, createAlbum, picked, requireLibrary, requirePicker, type CopyState, type Made, type PickToken } from "./connector";
+import { addToAlbum, copyPickedServer, createAlbum, picked, requireLibrary, requirePicker, type CopyState, type Made, type PickToken, type Relays } from "./connector";
 
 /**
  * Sorting picked Google Photos into groups (one album and/or Drive folder per group), in one job.
  *
- * Offload doesn't decide who or what is in a photo: the AI looks at the previews (show_photos), agrees the groups with
- * the person, and passes them here as item numbers (one group per person across the whole pick, matched by face, not outfit).
+ * Offload doesn't decide who or what is in a photo. In the connector, the AI looks at the previews (show_photos), agrees
+ * the groups with the person, and passes them here as item numbers; in the web app the person tags each photo themselves
+ * (components/app/PhotoTagger.tsx), and this runs in the browser with the site's relay (one group per person across the whole pick, matched by face, not outfit).
  * No face data is made or kept. This module only does the filing:
  * each photo is copied once, then put in every group it belongs to (more albums for the same copy, or shortcuts in
  * Drive), so a photo in five groups still uses its storage once.
@@ -192,7 +193,8 @@ export async function runSort(
   accounts: Account[],
   st: SortState,
   budgetMs: number,
-  token: (a: Account, scope: string, force?: boolean) => Promise<string>
+  token: (a: Account, scope: string, force?: boolean) => Promise<string>,
+  relays?: Relays
 ) {
   const to = accounts[st.to];
   if (!accounts[st.a] || !to) throw new Error("That job belongs to a different connection. Start again with pick_google_photos.");
@@ -204,7 +206,7 @@ export async function runSort(
     await setUp(st, lane, to);
     const left = copyBudget - (Date.now() - start);
     if (left <= 0) break;
-    const { done, made } = await copyPickedServer(accounts, lane.copy!, left, token);
+    const { done, made } = await copyPickedServer(accounts, lane.copy!, left, token, relays);
     if (lane.dest === "photos" && lane.copy!.album) lane.all = { id: lane.copy!.album.id, link: lane.copy!.album.url };
     if (made.length) {
       if (lane.dest === "photos") lane.made = [...(lane.made || []), ...made.map((m): [number, string] => [m.item, m.id])];

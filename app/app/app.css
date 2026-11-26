@@ -242,3 +242,55 @@ button.oa-name:hover, a.oa-name:hover { text-decoration:underline; text-decorati
   .tf.is-done .tf-check { animation:none; stroke-dashoffset:0; }
   .tf-odo-d > span { transition:none; }
 }
+
+/* Sort by people (components/app/PeopleSorter.tsx) */
+.oa-modal-wide { width:min(860px, 100%); }
+.pp-groups { list-style:none; margin:16px 0 0; padding:0; display:grid; gap:12px; }
+.pp-groups > li { border:1.5px solid var(--hair); border-radius:16px; padding:12px 14px; }
+.pp-groups > li.is-off { opacity:.55; }
+.pp-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+.pp-name { font:inherit; font-weight:600; padding:7px 10px; border-radius:9px; border:1.5px solid var(--hair); background:var(--surface); color:var(--ink); flex:1 1 180px; min-width:0; }
+.pp-name:focus-visible, .pp-merge:focus-visible, .pp-parent input:focus-visible { outline:3px solid var(--sun); outline-offset:1px; }
+.pp-count { font-family:var(--mono); font-size:13px; color:var(--muted); }
+.pp-merge { font:inherit; font-size:14px; padding:6px 8px; border-radius:9px; border:1.5px solid var(--hair); background:var(--surface); color:var(--ink); }
+.pp-faces { display:flex; flex-wrap:wrap; gap:6px; max-height:216px; overflow:auto; }
+.pp-faces button { padding:0; border:0; background:none; border-radius:12px; cursor:pointer; position:relative; line-height:0; }
+.pp-faces img { width:64px; height:64px; border-radius:12px; object-fit:cover; display:block; }
+.pp-faces button.is-off img { opacity:.3; filter:grayscale(1); }
+.pp-faces button.is-off::after { content:""; position:absolute; left:8px; right:8px; top:50%; height:2px; background:var(--red); transform:rotate(-35deg); }
+.pp-faces button:focus-visible { outline:3px solid var(--sun); outline-offset:2px; }
+.pp-where { border:0; padding:0; margin:14px 0; display:grid; gap:8px; }
+.pp-where legend { font-weight:600; margin-bottom:6px; padding:0; }
+.pp-where label { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border:1.5px solid var(--hair); border-radius:12px; cursor:pointer; }
+.pp-where label:has(input:checked) { border-color:var(--ink); background:var(--hover); }
+.pp-where label.is-off { cursor:default; opacity:.7; }
+.pp-where input { margin-top:4px; }
+.pp-parent { display:grid; gap:6px; font-weight:600; margin:14px 0; }
+.pp-parent input { font:inherit; font-weight:400; padding:9px 12px; border-radius:10px; border:1.5px solid var(--hair); background:var(--surface); color:var(--ink); }
+.pp-made { margin:0 0 12px; padding-left:20px; }
+.pp-once { margin-top:16px; }
+.pp-once summary { cursor:pointer; font-weight:600; padding:6px 0; }
+
+/* Sort picked Google Photos by person, by tapping (components/app/PhotoTagger.tsx) */
+.tg-people { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:14px 0; }
+.tg-chip { display:inline-flex; align-items:center; border-radius:999px; box-shadow:inset 0 0 0 1.5px var(--hair); background:var(--surface); }
+.tg-chip > button:first-child { display:inline-flex; align-items:center; gap:8px; background:none; border:0; padding:5px 6px 5px 5px; font:inherit; font-weight:600; color:var(--ink); cursor:pointer; border-radius:999px; }
+.tg-chip i { font-style:normal; display:inline-grid; place-items:center; width:26px; height:26px; border-radius:50%; background:var(--c); color:#fff; font-size:11px; font-weight:700; }
+.tg-chip b { font-family:var(--mono); font-weight:500; font-size:12px; color:var(--muted); }
+.tg-chip.is-on { box-shadow:inset 0 0 0 2.5px var(--c); background:var(--hover); }
+.tg-x { background:none; border:0; padding:4px 10px 4px 2px; font-size:18px; line-height:1; color:var(--muted); cursor:pointer; border-radius:999px; }
+.tg-x:hover { color:var(--red); }
+.tg-chip button:focus-visible, .tg-tile:focus-visible { outline:3px solid var(--sun); outline-offset:2px; }
+.tg-add { display:inline-flex; gap:6px; }
+.tg-add input { font:inherit; padding:7px 12px; border-radius:999px; border:1.5px solid var(--hair); background:var(--surface); color:var(--ink); min-width:190px; }
+.tg-add input:focus-visible { outline:3px solid var(--sun); outline-offset:1px; }
+.tg-add .btn { padding:7px 14px; border-radius:999px; }
+.tg-grid { list-style:none; margin:10px 0 0; padding:0; display:grid; grid-template-columns:repeat(auto-fill, minmax(104px, 1fr)); gap:6px; max-height:min(52vh, 560px); overflow:auto; }
+.tg-tile { position:relative; display:block; width:100%; aspect-ratio:1; padding:0; border:0; border-radius:12px; overflow:hidden; background:var(--slate-soft); cursor:pointer; }
+.tg-tile img { width:100%; height:100%; object-fit:cover; display:block; }
+.tg-tile.is-on::after { content:"✓"; position:absolute; inset:0; display:grid; place-items:start end; padding:6px 8px; font-weight:800; color:#fff; background:linear-gradient(200deg, rgba(28,27,23,.55), transparent 45%); box-shadow:inset 0 0 0 3px var(--sun); border-radius:12px; }
+.tg-ph { display:grid; place-items:center; width:100%; height:100%; font-size:12px; color:var(--muted); }
+.tg-tile .oa-vid { left:6px; right:auto; top:6px; }
+.tg-badges { position:absolute; left:5px; bottom:5px; display:flex; flex-wrap:wrap; gap:3px; max-width:calc(100% - 10px); }
+.tg-badges i { font-style:normal; display:inline-grid; place-items:center; min-width:20px; height:20px; padding:0 4px; border-radius:999px; color:#fff; font-size:10px; font-weight:700; box-shadow:0 0 0 1.5px #fff; }
+.tg-foot { position:sticky; bottom:-26px; background:var(--surface); padding:12px 0 4px; margin-bottom:-4px; }

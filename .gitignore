@@ -6,3 +6,6 @@ out
 *.tsbuildinfo
 next-env.d.ts
 .env*.local
+
+# Face models, copied from node_modules by scripts/face-models.mjs
+public/models/faces

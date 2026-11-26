@@ -1,7 +1,7 @@
 import { callGoogle, drive, DRIVE_SCOPE, LIBRARY_SCOPE, PICKER_SCOPE, type Account } from "@/lib/drive/api";
 import { count, createFolder, human } from "@/lib/drive/engine";
 import { listPicked, MAX_PICK, pollPicking, startPicking, type Picked } from "./engine";
-import { relayChunk, relayChunkToDrive } from "./relay";
+import { relayChunk, relayChunkToDrive, type DriveRelayRequest, type DriveRelayResponse, type RelayRequest, type RelayResponse } from "./relay";
 
 /**
  * Photos for the AI connector (server side).
@@ -422,6 +422,16 @@ export type CopyState = {
   errors: { name: string; detail: string }[];
 };
 
+/**
+ * How the bytes get moved. On the server the relay functions are called directly; the web app passes functions that
+ * call this site's /api/photos/copy, because browsers can't read the headers piece-by-piece copying needs.
+ */
+export type Relays = {
+  photos: (r: RelayRequest) => Promise<RelayResponse>;
+  drive: (r: DriveRelayRequest) => Promise<DriveRelayResponse>;
+};
+const DIRECT: Relays = { photos: relayChunk, drive: relayChunkToDrive };
+
 /** One finished copy, as handed to the AI: its number in the picked set and the new item's ID. */
 export type Made = { item: number; name: string; id: string; link?: string };
 
@@ -438,7 +448,8 @@ export async function copyPickedServer(
   accounts: Account[],
   st: CopyState,
   budgetMs: number,
-  token: (a: Account, scope: string, force?: boolean) => Promise<string>
+  token: (a: Account, scope: string, force?: boolean) => Promise<string>,
+  relays: Relays = DIRECT
 ) {
   const from = accounts[st.a];
   const to = accounts[st.to];
@@ -502,7 +513,7 @@ export async function copyPickedServer(
         upload: up,
         offset: off,
       };
-      const r = toDrive ? await relayChunkToDrive({ ...common, name: it.name, folder: st.folder!.id }) : await relayChunk(common);
+      const r = toDrive ? await relays.drive({ ...common, name: it.name, folder: st.folder!.id }) : await relays.photos(common);
       if (!r.ok) {
         if (r.status === 401 && !retried) {
           retried = true; // the sign-in ran out: get a fresh one and try that piece again

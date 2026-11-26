@@ -49,6 +49,8 @@ import {
 } from "@/lib/gmail/engine";
 import { Mark } from "@/components/Logo";
 import { TrashFlight } from "@/components/app/TrashFlight";
+import { PeopleSorter } from "@/components/app/PeopleSorter";
+import { PhotoTagger } from "@/components/app/PhotoTagger";
 
 const MAX_ACCOUNTS = 5;
 type Store = Awaited<ReturnType<typeof storage>>;
@@ -78,6 +80,7 @@ export default function OffloadApp({ clientId }: { clientId: string }) {
   const [waitingFor, setWaitingFor] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [sortingPeople, setSortingPeople] = useState(false);
   const [reload, setReload] = useState(0);
 
   const byEmail = useCallback((e: string) => accounts.find((a) => a.e === e), [accounts]);
@@ -401,7 +404,7 @@ export default function OffloadApp({ clientId }: { clientId: string }) {
             {from && tab === "media" && <FilesTab key={from.e + reload} acct={from} sel={sel} toggle={toggle} mode="media" />}
             {tab === "waiting" && <WaitingTab key={reload} accounts={accounts} onAccept={runAccept} />}
             {tab === "gmail" && <GmailTab accounts={accounts} initial={fromE} stor={stor} reloadKey={reload} onTrash={runTrash} />}
-            {tab === "photos" && from && to && <PhotosTab key={from.e + to.e + reload} from={from} to={to} onCopy={runCopy} />}
+            {tab === "photos" && from && to && <PhotosTab key={from.e + to.e + reload} from={from} to={to} accounts={accounts} onCopy={runCopy} />}
             {tab === "photos" && (!from || !to) && (
               <p className="oa-empty">Add the account you want to copy photos to, then pick photos here.</p>
             )}
@@ -421,6 +424,11 @@ export default function OffloadApp({ clientId }: { clientId: string }) {
                   Clear
                 </button>
               </p>
+              {tab === "media" && from && (
+                <button className="btn btn-quiet" onClick={() => setSortingPeople(true)}>
+                  Sort by people
+                </button>
+              )}
               {to ? (
                 <button className="btn btn-main" onClick={() => setConfirming(true)}>
                   Move to {to.e}
@@ -433,6 +441,12 @@ export default function OffloadApp({ clientId }: { clientId: string }) {
             </div>
           )}
         </>
+      )}
+
+      {sortingPeople && from && (
+        <Modal title="Sort by people" wide onClose={() => setSortingPeople(false)}>
+          <PeopleSorter from={from} accounts={accounts} ids={[...sel.keys()]} onClose={() => setSortingPeople(false)} />
+        </Modal>
       )}
 
       {confirming && from && to && (
@@ -897,8 +911,9 @@ function WaitingTab({ accounts, onAccept }: { accounts: Account[]; onAccept: (a:
 
 /* --------------------------------------------------------------------- */
 
-function PhotosTab({ from, to, onCopy }: { from: Account; to: Account; onCopy: (from: Account, to: Account, sessionId: string) => void }) {
+function PhotosTab({ from, to, accounts, onCopy }: { from: Account; to: Account; accounts: Account[]; onCopy: (from: Account, to: Account, sessionId: string) => void }) {
   const [, rerender] = useState(0);
+  const [tagging, setTagging] = useState(false);
   const [error, setError] = useState("");
   const [session, setSession] = useState<{ id: string; uri: string; pollMs: number } | null>(null);
   const [blockedUri, setBlockedUri] = useState("");
@@ -1051,11 +1066,25 @@ function PhotosTab({ from, to, onCopy }: { from: Account; to: Account; onCopy: (
                 Copy {picked.length.toLocaleString("en-US")} to {to.e}
               </button>
             )}
+            {picked.length > 0 && (
+              <button className="btn btn-quiet" onClick={() => setTagging(true)}>
+                Sort by people
+              </button>
+            )}
             <button className="btn btn-quiet" onClick={pick}>
               Pick again
             </button>
           </div>
+          <p className="oa-fine">
+            Sort by people: tag who&rsquo;s in each photo, then get an album or Drive folder per person, in the account you choose.
+          </p>
         </div>
+      )}
+
+      {tagging && session && picked && (
+        <Modal title="Sort by people" wide>
+          <PhotoTagger from={from} accounts={accounts} sessionId={session.id} items={picked} onClose={() => setTagging(false)} />
+        </Modal>
       )}
     </div>
   );
@@ -1271,7 +1300,7 @@ function GmailTab({
 
 /* --------------------------------------------------------------------- */
 
-function Modal({ title, onClose, children }: { title: string; onClose?: () => void; children: React.ReactNode }) {
+function Modal({ title, onClose, children, wide }: { title: string; onClose?: () => void; children: React.ReactNode; wide?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     ref.current?.focus();
@@ -1281,7 +1310,7 @@ function Modal({ title, onClose, children }: { title: string; onClose?: () => vo
   }, [onClose]);
   return (
     <div className="oa-veil" onClick={(e) => e.target === e.currentTarget && onClose?.()}>
-      <div className="oa-modal" role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={ref}>
+      <div className={wide ? "oa-modal oa-modal-wide" : "oa-modal"} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={ref}>
         <h2>{title}</h2>
         {children}
       </div>

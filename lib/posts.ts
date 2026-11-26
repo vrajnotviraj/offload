@@ -55,7 +55,7 @@ export const POSTS: Post[] = [
         { who: "ai", tool: "picked_photos", text: "You picked **412 photos and 9 videos**, from 14 to 19 October 2026." },
       ] },
       { h2: "2. Say who’s who" },
-      { p: "Tell your AI the names of the people in the group. It looks through small previews of the photos, a dozen at a time, and suggests which ones each person is in. You check, correct and agree. Offload itself doesn’t recognise faces or keep any face data: the groups are what you and your AI decide." },
+      { p: "Tell your AI the names of the people in the group. It looks through small previews of the photos, a dozen at a time, and suggests which ones each person is in. You check, correct and agree. In chat, Offload itself doesn’t recognise faces or keep any face data: the groups are what you and your AI decide. (For photos in Google Drive, the Offload web app can also group faces for you, on your own device: see below.)" },
       { chat: [
         { who: "you", text: "It’s me, Riya and Kabir. Riya has the red jacket, Kabir’s the tall one with glasses." },
         { who: "ai", tool: "show_photos", text: "Here’s what I see so far: you’re in about 230, Riya in 168, Kabir in 141, and 38 are just the beach with nobody in them. Photos 52 to 60 are blurry group shots: shall I put those in everyone’s folder?" },
@@ -97,6 +97,7 @@ export const POSTS: Post[] = [
       "Google Photos groups faces, but can’t make an album per person for you. With Offload in ChatGPT or Claude, pick the photos, say who’s who, and get an album or a Drive folder for each person, with no photo stored twice.",
     topic: "Photos",
     date: "2026-11-25",
+    updated: "2026-11-26",
     keywords: ["sort Google Photos by person", "Google Photos album for each person", "organise photos by people", "sort photos by face into folders", "Google Photos people albums", "sort photos with AI", "ChatGPT sort photos"],
     body: [
       { p: "Google Photos is good at spotting faces, but turning that into an album for each person still means a lot of tapping. And if you want the photos somewhere you can share or hand over, like a Drive folder per person, there’s no button for it at all. Offload does it from ChatGPT or Claude." },
@@ -126,7 +127,9 @@ export const POSTS: Post[] = [
         "**Both** is fine too. You get an album and a folder per person.",
       ] },
       { h2: "Who decides who’s who" },
-      { p: "You do. Offload has no face recognition and keeps no face data. Your AI app looks at the previews in the conversation, the same way it would look at any picture you sent it, and suggests groups. It can get things wrong, especially with small faces in group shots, so check the list before it sorts. A quick “move 52 to 60 into everyone’s folder” fixes most of it." },
+      { p: "You do. In chat, Offload has no face recognition and keeps no face data. Your AI app looks at the previews in the conversation, the same way it would look at any picture you sent it, and suggests groups. It can get things wrong, especially with small faces in group shots, so check the list before it sorts. A quick “move 52 to 60 into everyone’s folder” fixes most of it." },
+      { p: "You can also do it without an AI app, in the Offload web app: in the Google Photos tab, pick photos, click Sort by people, add the people, and tap every photo each one is in. Then choose which of your accounts gets an album (or Drive folder) per person. Offload doesn’t look at faces here: who’s in each photo is up to you." },
+      { p: "For photos stored in Google Drive there’s also Sort by people in the Offload web app: select photos in Photos & videos and click Sort by people. Faces are found and grouped in your browser, on your own device (nothing is uploaded or kept), you name and check each group, and then choose which of your accounts gets a Drive folder per person. Google’s rules don’t let apps group faces from the Google Photos library, so this works for Drive photos only." },
       { h2: "What you need" },
       { ul: [
         "The Offload connector in ChatGPT or Claude, connected with the **Google Photos** boxes ticked. [How to add it](/blog/move-google-drive-files-with-claude).",

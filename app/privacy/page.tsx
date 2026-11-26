@@ -44,6 +44,22 @@ export default function Privacy() {
             the photos and videos you select there; in the account you copy to, it can add photos, and can&rsquo;t see or change
             anything already in that account.
           </p>
+          <p>
+            <b>Sorting picked Google Photos by person</b> works from your own tags: you say who&rsquo;s in each photo, and
+            Offload doesn&rsquo;t look at faces. To show the photos you picked as small previews, your browser loads them from
+            Google; if it can&rsquo;t, they pass through this website on the way, with that account&rsquo;s short-lived access,
+            without being stored or looked at. The names you type are used only for the album and folder names.
+          </p>
+          <p>
+            <b>Faces, on your device only</b>, if you use Sort by people on photos in your Google Drive. The web app reads a
+            preview of each photo you selected, finds the faces in it and works out a set of numbers describing each face, so
+            faces that look alike can be grouped. All of this runs in your browser, with models served by this website: the
+            photos, the face numbers and the small face pictures never leave your device, aren&rsquo;t sent to Offload or anyone
+            else, and aren&rsquo;t saved; closing the window forgets them. Offload doesn&rsquo;t know who anyone is: the groups
+            are &ldquo;Person 1&rdquo;, &ldquo;Person 2&rdquo; until you name them, and only the folder names you choose are
+            written to Drive. It works on Google Drive photos only: Google&rsquo;s rules don&rsquo;t allow grouping faces from the
+            Google Photos library. Photos often show people other than you, so use it for photos you have the right to organise.
+          </p>
 
           <h2>What it stores</h2>
           <p>

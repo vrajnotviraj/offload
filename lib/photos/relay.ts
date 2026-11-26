@@ -3,7 +3,8 @@
  * headers Google Photos uses for piece-by-piece downloads (Content-Range) and uploads (X-Goog-Upload-URL), so each
  * call downloads one piece of a picked photo from the source account and hands it straight to the receiving
  * account's upload. Nothing is stored or looked at, and the relay only talks to Google Photos' own addresses.
- * relayChunkToDrive (AI connector only, not reachable over HTTP) does the same into a Google Drive upload instead.
+ * relayChunkToDrive does the same into a Google Drive upload instead (the connector calls it directly; the web app
+ * reaches it through /api/photos/copy with `to: "drive"`, for sorting picked photos into Drive folders).
  */
 
 export const CHUNK = 16 * 1024 * 1024; // a multiple of 256 KB, as resumable uploads need
@@ -128,7 +129,7 @@ export async function relayChunk(r: RelayRequest): Promise<RelayResponse> {
 }
 
 /* ===================================================================== *
- * Into Google Drive instead (AI connector only)
+ * Into Google Drive instead
  * ===================================================================== */
 
 const DRIVE_UPLOADS = "https://www.googleapis.com/upload/drive/v3/files";
