@@ -9,3 +9,4 @@ next-env.d.ts
 
 # Face models, copied from node_modules by scripts/face-models.mjs
 public/models/faces
+.data

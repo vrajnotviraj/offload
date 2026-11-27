@@ -9,11 +9,12 @@ export async function GET(req: Request) {
   const q = new URL(req.url).searchParams;
   const flow = open<Flow>("flow", q.get("state"));
   if (!flow || !Array.isArray(flow.accts)) {
-    return page({ title: "This sign-in expired", body: "<p>Go back to your AI app and connect Offload again.</p>" });
+    return page({ title: "This sign-in expired", body: "<p>Go back to your AI app (or the Offload bot in Telegram) and connect Offload again.</p>" });
   }
 
   if (q.get("error")) {
     if (q.get("error") === "access_denied" && !flow.accts.length) {
+      if (flow.p.tg) return page({ title: "Sign-in cancelled", body: "<p>Nothing was linked. Send /link to the Offload bot in Telegram to try again.</p>" });
       return backToClient(flow.p, { error: "access_denied", error_description: "Google sign-in was cancelled." }, origin(req));
     }
     // Cancelled an extra account: carry on with the ones already linked.
@@ -40,7 +41,9 @@ export async function GET(req: Request) {
         title: "You're on the waitlist",
         body:
           `<p>${esc(waitlistMessage(acct.e, a.position))}</p>` +
-          "<p>Offload didn't keep your sign-in. Once you're let in, connect Offload again in your AI app.</p>",
+          (flow.p.tg
+            ? "<p>Offload didn't keep your sign-in. Once you're let in, send /link to the Offload bot in Telegram.</p>"
+            : "<p>Offload didn't keep your sign-in. Once you're let in, connect Offload again in your AI app.</p>"),
         button: { href: `${origin(req)}/`, label: "Back to Offload" },
       });
     }

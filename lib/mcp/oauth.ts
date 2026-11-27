@@ -15,8 +15,11 @@ export const FLOW_TTL = 30 * 60;
 
 /** Sealed as "client": what a registered client may use. */
 export type Client = { r: string[]; n?: string };
-/** The client request being served while the person signs in. */
-export type Pending = { cid: string; r: string; s?: string; cc: string };
+/**
+ * The client request being served while the person signs in. `tg` is set instead of a client when the sign-in
+ * was started from the Telegram bot: it's the chat to link the accounts to (see lib/telegram).
+ */
+export type Pending = { cid: string; r: string; s?: string; cc: string; tg?: number };
 /** Sealed as "flow": Google's state parameter. Holds the accounts linked so far, main first. */
 export type Flow = { p: Pending; accts: Account[] };
 /**

@@ -13,6 +13,7 @@ Pick whole folders, your largest files, or photos and videos, and hand them over
 | `app/`, `components/`, `lib/` | The site (Next.js), deployed on Vercel. Landing page, blog (posts live in `lib/posts.ts`), privacy page, SEO metadata, sitemap, robots and manifest. |
 | `app/app`, `components/app`, `lib/drive/`, `lib/gmail/`, `lib/photos/`, `app/api/photos/` | The Offload web app at `/app`: Drive, Gmail cleanup and Google Photos, running in the browser, plus the photo relay. `lib/drive/engine.ts` is shared with the connector. |
 | `app/mcp`, `app/oauth`, `app/.well-known`, `lib/mcp/` | The MCP connector, so people can move files by asking Claude, ChatGPT or any app that supports remote MCP connectors. Runs on the same Vercel deployment. |
+| `app/api/telegram`, `app/telegram`, `lib/telegram/` | The Telegram bot: plain commands for storage, finding and moving files. |
 | `app/llms.txt`, `app/llms-full.txt`, `lib/llms.ts` | `/llms.txt` and `/llms-full.txt`: Markdown summaries of the site for ChatGPT, Claude, Perplexity and other AI search. Built from the posts and FAQs, so new posts appear automatically. |
 | `brand/` | Logo, profile picture and banners for LinkedIn, X and link previews. |
 | `public/google0aa1b7412de3fcf6.html` | Google Search Console ownership verification. Keep it, or the site loses verification. |
@@ -31,6 +32,7 @@ Environment variables:
 | --- | --- |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | The Google OAuth client the web app and the Claude connector sign in with (the secret is only used by the connector). |
 | `MCP_TOKEN_SECRET` | Seals the connector's tokens. See Offload in AI apps below. |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_DATA_DIR` | The Telegram bot. See Offload in Telegram below. |
 
 The site's public address (canonical links, the sitemap, share previews, `llms.txt` and the connector address) is fixed at `https://www.offloadapp.space` in `lib/site.ts` and `scripts/indexnow.mjs`, so no environment variable can point search engines at a different host.
 
@@ -114,6 +116,38 @@ There's no database. The connector is its own OAuth server for Claude (discovery
 While the consent screen's publishing status is **Testing**, Google lets only test users sign in and expires the sign-ins after 7 days. When that happens Claude says so, and the person removes and adds the connector again. Publishing the app (for the Drive scope that means Google's verification) removes both limits.
 
 To try it locally: `npm run build && npm start` with the three variables set, add `http://localhost:3000/oauth/callback` to the OAuth client, and point an MCP client such as the MCP Inspector at `http://localhost:3000/mcp`.
+
+## Offload in Telegram (bot)
+
+A plain command bot, no AI, using the same Drive engine as the web app and the connector. It only answers in private chats.
+
+| Command | What it does |
+| --- | --- |
+| `/start`, `/link` | Sends a button to link 2 to 5 Google accounts, main account first. It reuses the connector's sign-in pages (`/oauth/callback`); the flow carries the Telegram chat id instead of an AI app's request, and Finish saves the accounts for that chat and messages it. |
+| `/storage` | Storage of every linked account, numbered. |
+| `/big [videos\|photos\|media\|documents] [n]` | The 15 biggest files in the fullest account (or account n). |
+| `/find <words>` | Folders and files by name, in every account. |
+| `/move 1 3 5-8 [to n]` | Moves items from the last list to the other account (or account n), after a Confirm button. Progress is shown by editing the message. Big jobs keep going in 40-second steps for up to 30 minutes; sending the same `/move` again carries on, since moved items are skipped. |
+| `/unlink` | Forgets the accounts and revokes Offload's Google sign-in for them. |
+
+Telegram can't send a sealed token back with every message the way an MCP client does, so the bot keeps each chat's accounts in one JSON file, `TELEGRAM_DATA_DIR/telegram.json` (default `./.data`). Each chat's record is sealed with `MCP_TOKEN_SECRET`, so the file holds no readable tokens. **On Railway, add a volume and set `TELEGRAM_DATA_DIR` to its mount path**, or every deploy signs everyone out. The bot runs on one instance; with several replicas, move the store to Redis or Postgres.
+
+Setup:
+
+1. In Telegram, message [@BotFather](https://t.me/BotFather), send `/newbot` and copy the token.
+2. In Railway, set `TELEGRAM_BOT_TOKEN` to it, `TELEGRAM_WEBHOOK_SECRET` to a random string (letters, digits, `_` and `-`, up to 256), and `TELEGRAM_DATA_DIR` to the volume's path. Optionally `TELEGRAM_BOT_USERNAME`, otherwise it's looked up.
+3. Register the webhook once:
+
+   ```bash
+   curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
+     -d url=https://www.offloadapp.space/api/telegram \
+     -d secret_token=$TELEGRAM_WEBHOOK_SECRET \
+     -d 'allowed_updates=["message","callback_query"]'
+   ```
+
+4. Optional: send BotFather `/setcommands` with `storage - Storage of each account`, `big - Biggest files`, `find - Find files by name`, `move - Move files from the last list`, `link - Link Google accounts`, `unlink - Forget my accounts`, `help - What I can do`.
+
+The Google OAuth client needs nothing new: the bot signs in through the same `/oauth/callback` redirect as the connector.
 
 ## Early access and the waitlist
 
