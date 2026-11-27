@@ -15,12 +15,8 @@ async function main() {
     return;
   }
 
-  const explicit = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "");
-  const site = explicit || (process.env.VERCEL_PROJECT_PRODUCTION_URL && `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`);
-  if (!site) {
-    console.log("[indexnow] skipped: no site address (set NEXT_PUBLIC_SITE_URL)");
-    return;
-  }
+  // The same fixed address as SITE_URL in lib/site.ts.
+  const site = "https://www.offloadapp.space";
   const host = new URL(site).host;
 
   // The key is the name of the 32-character hex .txt file in public/, which also holds the key.
